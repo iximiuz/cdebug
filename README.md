@@ -17,6 +17,14 @@ Currently supported toolkit images:
 - `busybox` - a good default choice
 - `nixery.dev/shell/...` - [a very powerful way to assemble images on the fly](https://nixery.dev/).
 
+Supported runtimes:
+
+- Docker (via the socket file)
+- containerd (via the socket file) - coming soon
+- Kubernetes CRI (via the CRI gRPC API) - coming later
+- Kubernetes (via the API server) - coming later
+- runc or alike (via directly invoking the CLI) - coming later.
+
 ## How it works
 
 The technique is based on the ideas from this [blog post](https://iximiuz.com/en/posts/docker-debug-slim-containers).
