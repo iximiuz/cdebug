@@ -111,3 +111,12 @@ a ~~little~~ huge help of the [nixery](https://nixery.dev/) project:
 ```sh
 cdebug exec -it --image nixery.dev/shell/ps/findutils/tcpdump my-distroless
 ```
+
+## TODO:
+
+- Terminal resizing ([example](https://github.com/docker/cli/blob/110c4d92b883357c9fb3edc344c4fbec5f77896f/cli/command/container/tty.go#L71))
+- More `exec` flags (like in `docker run`)
+- Helper command(s) suggesting nix(ery) packages
+- E2E Tests
+- Cross-platform builds
+- Non-docker runtimes (containerd, runc, k8s)
