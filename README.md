@@ -120,3 +120,8 @@ cdebug exec -it --image nixery.dev/shell/ps/findutils/tcpdump my-distroless
 - E2E Tests
 - Cross-platform builds
 - Non-docker runtimes (containerd, runc, k8s)
+
+## Similar tools
+
+- [`docker-slim debug`](https://github.com/docker-slim/docker-slim) - a PoC `debug` command for DockerSlim (contributed by [D4N](https://github.com/D4N))
+- [`debug-ctr`](https://github.com/felipecruz91/debug-ctr) - a debugger that restarts the target container with a toolkit volume (by [Felipe Cruz Martinez](https://github.com/felipecruz91))
