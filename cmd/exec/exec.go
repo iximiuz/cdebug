@@ -1,8 +1,10 @@
 package exec
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"html/template"
 	"io"
 	"strings"
 
@@ -86,14 +88,40 @@ func NewCommand(cli cmd.CLI) *cobra.Command {
 	return cmd
 }
 
-const chrootProgramBusybox = `
+var (
+	// NOTE: Using $$ (current process PID) instead of ${SANDBOX_PID} breaks
+	//       (at least) the nixery program - the /proc symlinks become invalid
+	//       while chroot-ing and the operation cannot be finished (execve fails
+	//       with ENOENT, likely because of the missing/misplaced ELF interpreter).
+	chrootProgramBusybox = template.Must(template.New("busybox-chroot").Parse(`
+set -euo pipefail
+
+sleep 999999999 &
+SANDBOX_PID=$!
+
+ln -s /proc/${SANDBOX_PID}/root/bin/ /proc/1/root/.cdebug-{{ .ID }}
+
+export PATH=$PATH:/.cdebug-{{ .ID }}
+
+chroot /proc/1/root sh
+`))
+
+	chrootProgramNixery = template.Must(template.New("nixery-chroot").Parse(`
 set -euxo pipefail
 
-rm -rf /proc/1/root/.cdebug
-ln -s /proc/$$/root/bin/ /proc/1/root/.cdebug
-export PATH=$PATH:/.cdebug
+sleep 999999999 &
+SANDBOX_PID=$!
+
+rm -rf /proc/1/root/nix
+ln -s /proc/${SANDBOX_PID}/root/nix /proc/1/root/nix
+
+ln -s /proc/${SANDBOX_PID}/root/bin /proc/1/root/.cdebug-{{ .ID }}
+
+export PATH=$PATH:/.cdebug-{{ .ID }}
+
 chroot /proc/1/root sh
-`
+`))
+)
 
 func runDebugger(ctx context.Context, cli cmd.CLI, opts *options) error {
 	if err := cli.InputStream().CheckTty(opts.stdin, opts.tty); err != nil {
@@ -112,12 +140,22 @@ func runDebugger(ctx context.Context, cli cmd.CLI, opts *options) error {
 		return err
 	}
 
+	runID := shortID()
 	target := "container:" + opts.target
 	resp, err := client.ContainerCreate(
 		ctx,
 		&container.Config{
 			Image: opts.image,
-			Cmd:   []string{"sh", "-c", chrootProgramBusybox},
+			Cmd: []string{
+				"sh",
+				"-c",
+				mustRenderTemplate(func() *template.Template {
+					if strings.Contains(opts.image, "nixery") {
+						return chrootProgramNixery
+					}
+					return chrootProgramBusybox
+				}(), map[string]string{"ID": runID}),
+			},
 			// AttachStdin: true,
 			OpenStdin: opts.stdin,
 			Tty:       opts.tty,
@@ -130,7 +168,7 @@ func runDebugger(ctx context.Context, cli cmd.CLI, opts *options) error {
 		},
 		nil,
 		nil,
-		debuggerName(opts.name),
+		debuggerName(opts.name, runID),
 	)
 	if err != nil {
 		return fmt.Errorf("cannot create debugger container: %w", err)
@@ -270,10 +308,21 @@ func (s *ioStreamer) stream(ctx context.Context) error {
 	return nil
 }
 
-func debuggerName(name string) string {
+func debuggerName(name string, runID string) string {
 	if len(name) > 0 {
 		return name
 	}
+	return "cdebug-" + runID
+}
 
-	return "cdebug-" + strings.Split(uuid.NewString(), "-")[0]
+func shortID() string {
+	return strings.Split(uuid.NewString(), "-")[0]
+}
+
+func mustRenderTemplate(t *template.Template, data any) string {
+	var buf bytes.Buffer
+	if err := t.Execute(&buf, data); err != nil {
+		panic(fmt.Errorf("cannot render template %q: %w", t.Name(), err))
+	}
+	return buf.String()
 }
