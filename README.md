@@ -11,7 +11,7 @@ toolkit image (`busybox` or anything starting from `nixery.dev/shell`).
 **Important:** The target container isn't recreated and/or restarted. And no extra
 volumes is needed.
 
-Notice, how the debugger's shell actually has the original distroless rootfs as it's root directory:
+Notice how the debugger's shell actually has the original distroless rootfs as it's root directory:
 
 ```sh
 $ docker run -d --rm \
