@@ -1,5 +1,7 @@
 # cdebug - experimental container debugger
 
+Mostly for troubleshooting slim & distroless containers that lack a shell and other debugging tools. The technique is based on the ideas from this [blog post](https://iximiuz.com/en/posts/docker-debug-slim-containers).
+
 Work in progres...
 
 ## Demo
@@ -11,7 +13,7 @@ toolkit image (`busybox` or anything starting from `nixery.dev/shell`).
 **Important:** The target container isn't recreated and/or restarted. And no extra
 volumes is needed.
 
-Notice how the debugger's shell actually has the original distroless rootfs as it's root directory:
+Notice how the debugger's shell actually has the original distroless rootfs as its root directory:
 
 ```sh
 $ docker run -d --rm \
