@@ -1,7 +1,15 @@
 # cdebug - experimental container debugger (WIP)
 
-A handy way of troubleshooting containers lacking a shell and/or debugging tools
-(e.g, scratch, slim, or distroless).
+A handy way to troubleshoot containers lacking a shell and/or debugging tools
+(e.g, scratch, slim, or distroless):
+
+```sh
+# Simple (busybox)
+$ cdebug exec -it <target-container>
+
+# Advanced (shell + ps + vim)
+$ cdebug exec -it --image nixery.dev/shell/ps/vim <target-container>
+```
 
 The `cdebug exec` command is some sort of crossbreeding of `docker exec` and `kubectl debug` commands.
 You point the tool at a running container, say what toolkit image to use, and it starts
@@ -14,8 +22,8 @@ a debugging "sidecar" container that _feels_ like a `docker exec` session into t
 
 Currently supported toolkit images:
 
-- `busybox` - a good default choice
-- `nixery.dev/shell/...` - [a very powerful way to assemble images on the fly](https://nixery.dev/).
+- 🧰 `busybox` - a good default choice
+- 🧙 `nixery.dev/shell/...` - [a very powerful way to assemble images on the fly](https://nixery.dev/).
 
 Supported runtimes:
 
@@ -24,27 +32,6 @@ Supported runtimes:
 - Kubernetes CRI (via the CRI gRPC API) - coming later
 - Kubernetes (via the API server) - coming later
 - runc or alike (via directly invoking the CLI) - coming later.
-
-## How it works
-
-The technique is based on the ideas from this [blog post](https://iximiuz.com/en/posts/docker-debug-slim-containers).
-Oversimplifying, the debugger container is started like:
-
-```sh
-docker run [-it] \
-  --network container:<target> \
-  --pid container:<target> \
-  --uts container:<target> \
-  <toolkit-image>
-  sh -c <<EOF
-ln -s /proc/$$/root/bin/ /proc/1/root/.cdebug
-
-export PATH=$PATH:/.cdebug
-chroot /proc/1/root sh
-EOF
-```
-
-The secret sauce is the symlink + PATH modification + chroot-ing.
 
 ## Demo 1: An interactive shell with busybox
 
@@ -82,14 +69,14 @@ drwxr-xr-x    5 root     root        4.0K Jan  1  1970 nodejs
 ...
 ```
 
-Notice the 👉 emoji above - that's where the debugging tools live:
+Notice 👉  above - that's where the debugging tools live:
 
 ```sh
 / $# echo $PATH
 /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/.cdebug-c153d669
 ```
 
-The process tree is also common:
+The process tree of the debugger container is the process tree of the target:
 
 ```sh
 / # ps auxf
@@ -103,23 +90,35 @@ PID   USER     TIME  COMMAND
    45 root      0:00 ps auxf
 ```
 
-## Demo 2: An interactive shell with advanced tools
+## Demo 2: An interactive shell with advanced tools and code editor
 
 If the tools provided by busybox aren't enough, you can bring your own tools with
 a ~~little~~ huge help of the [nixery](https://nixery.dev/) project:
 
 ```sh
-cdebug exec -it --image nixery.dev/shell/ps/findutils/tcpdump my-distroless
+cdebug exec -it --image nixery.dev/shell/ps/findutils/tcpdump/vim my-distroless
 ```
 
-## TODO:
+## How it works
 
-- Terminal resizing ([example](https://github.com/docker/cli/blob/110c4d92b883357c9fb3edc344c4fbec5f77896f/cli/command/container/tty.go#L71))
-- More `exec` flags (like in `docker run`)
-- Helper command(s) suggesting nix(ery) packages
-- E2E Tests
-- Cross-platform builds
-- Non-docker runtimes (containerd, runc, k8s)
+The technique is based on the ideas from this [blog post](https://iximiuz.com/en/posts/docker-debug-slim-containers).
+Oversimplifying, the debugger container is started like:
+
+```sh
+docker run [-it] \
+  --network container:<target> \
+  --pid container:<target> \
+  --uts container:<target> \
+  <toolkit-image>
+  sh -c <<EOF
+ln -s /proc/$$/root/bin/ /proc/1/root/.cdebug
+
+export PATH=$PATH:/.cdebug
+chroot /proc/1/root sh
+EOF
+```
+
+The secret sauce is the symlink + PATH modification + chroot-ing.
 
 ## Similar tools
 
@@ -127,3 +126,17 @@ cdebug exec -it --image nixery.dev/shell/ps/findutils/tcpdump my-distroless
 - [`debug-ctr`](https://github.com/felipecruz91/debug-ctr) - a debugger that creates a new container out of the original container with the toolkit mounted in a volume (by [Felipe Cruz Martinez](https://github.com/felipecruz91))
 - [`docker-opener`](https://github.com/artemkaxboy/docker-opener) - a multi-purpose tool that in particular can run a shell session into your container (and if there is no shell inside, it'll bring its own busybox).
 - [`cntr`](https://github.com/Mic92/cntr) - is "a replacement for `docker exec` that brings all your developers tools with you" by mounting the file system from one container (or the host) into the target container and creating a nested container with the help of a FUSE filesystem. Supports a huge range of runtimes (docker, podman, LXC/LXD, rkt, systemd-nspawn, containerd) because it operates on the OS level.
+
+## TODO:
+
+- Make exec accept (partial) container IDs (only names are supported at the moment)
+- Terminal resizing ([example](https://github.com/docker/cli/blob/110c4d92b883357c9fb3edc344c4fbec5f77896f/cli/command/container/tty.go#L71))
+- More `exec` flags (like in `docker run`): `--privileged`, `--volume`, `--env`, etc.
+- Helper command(s) suggesting nix(ery) packages
+- E2E Tests
+- Cross-platform builds + goreleaser
+- Non-docker runtimes (containerd, runc, k8s)
+
+## Contributions
+
+It's a pre-alpha with no sound design yet, so I may not be accepting all PRs. Sorry about that :)
