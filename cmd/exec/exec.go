@@ -97,37 +97,24 @@ func NewCommand(cli cmd.CLI) *cobra.Command {
 }
 
 var (
-	// NOTE: Using $$ (current process PID) instead of ${SANDBOX_PID} breaks
-	//       (at least) the nixery program - the /proc symlinks become invalid
-	//       while chroot-ing and the operation cannot be finished (execve fails
-	//       with ENOENT, likely because of the missing/misplaced ELF interpreter).
-	chrootProgramBusybox = template.Must(template.New("busybox-chroot").Parse(`
-set -eumo pipefail
+	chrootEntrypoint = template.Must(template.New("chroot-entrypoint").Parse(`
+set -euo pipefail
 
-sleep 999999999 &
-SANDBOX_PID=$!
-
-ln -s /proc/${SANDBOX_PID}/root/bin/ /proc/1/root/.cdebug-{{ .ID }}
-
-export PATH=$PATH:/.cdebug-{{ .ID }}
-
-chroot /proc/1/root {{ .Cmd }}
-`))
-
-	chrootProgramNixery = template.Must(template.New("nixery-chroot").Parse(`
-set -eumo pipefail
-
-sleep 999999999 &
-SANDBOX_PID=$!
-
+{{ if .IsNix }}
 rm -rf /proc/1/root/nix
-ln -s /proc/${SANDBOX_PID}/root/nix /proc/1/root/nix
+ln -s /proc/$$/root/nix /proc/1/root/nix
+{{ end }}
 
-ln -s /proc/${SANDBOX_PID}/root/bin /proc/1/root/.cdebug-{{ .ID }}
+ln -s /proc/$$/root/bin/ /proc/1/root/.cdebug-{{ .ID }}
 
+cat > /.cdebug-entrypoint.sh <<EOF
+#!/bin/sh
 export PATH=$PATH:/.cdebug-{{ .ID }}
 
 chroot /proc/1/root {{ .Cmd }}
+EOF
+
+sh /.cdebug-entrypoint.sh
 `))
 )
 
@@ -157,21 +144,19 @@ func runDebugger(ctx context.Context, cli cmd.CLI, opts *options) error {
 			Cmd: []string{
 				"sh",
 				"-c",
-				mustRenderTemplate(func() *template.Template {
-					if strings.Contains(opts.image, "nixery") {
-						return chrootProgramNixery
-					}
-					return chrootProgramBusybox
-				}(), map[string]string{
-					"ID": runID,
-					"Cmd": func() string {
-						// TODO: Use `sh -i` when -it is passed.
-						if len(opts.cmd) == 0 {
-							return "sh"
-						}
-						return "sh -c '" + strings.Join(shellescape(opts.cmd), " ") + "'"
-					}(),
-				}),
+				mustRenderTemplate(
+					chrootEntrypoint,
+					map[string]any{
+						"ID":    runID,
+						"IsNix": strings.Contains(opts.image, "nixery"),
+						"Cmd": func() string {
+							if len(opts.cmd) == 0 {
+								return "sh"
+							}
+							return "sh -c '" + strings.Join(shellescape(opts.cmd), " ") + "'"
+						}(),
+					},
+				),
 			},
 			Tty:       opts.tty,
 			OpenStdin: opts.stdin,
