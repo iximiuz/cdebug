@@ -4,13 +4,14 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"html/template"
 	"io"
 	"strings"
+	"text/template"
 
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
 	dockerclient "github.com/docker/docker/client"
+	"github.com/docker/docker/pkg/stdcopy"
 	"github.com/google/uuid"
 	"github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
@@ -31,12 +32,13 @@ const (
 )
 
 type options struct {
-	target string
-	name   string
-	image  string
-	tty    bool
-	stdin  bool
-	cmd    []string
+	target     string
+	name       string
+	image      string
+	tty        bool
+	stdin      bool
+	cmd        []string
+	privileged bool
 }
 
 func NewCommand(cli cmd.CLI) *cobra.Command {
@@ -75,14 +77,20 @@ func NewCommand(cli cmd.CLI) *cobra.Command {
 		"interactive",
 		"i",
 		false,
-		"Keep the STDIN open (same as in `docker exec -i`)",
+		"Keep the STDIN open (as in `docker exec -i`)",
 	)
 	flags.BoolVarP(
 		&opts.tty,
 		"tty",
 		"t",
 		false,
-		"Allocate a pseudo-TTY (same as in `docker exec -t`)",
+		"Allocate a pseudo-TTY (as in `docker exec -t`)",
+	)
+	flags.BoolVar(
+		&opts.privileged,
+		"privileged",
+		false,
+		"God mode for the debugger container (as in `docker run --privileged`)",
 	)
 
 	return cmd
@@ -94,7 +102,7 @@ var (
 	//       while chroot-ing and the operation cannot be finished (execve fails
 	//       with ENOENT, likely because of the missing/misplaced ELF interpreter).
 	chrootProgramBusybox = template.Must(template.New("busybox-chroot").Parse(`
-set -euo pipefail
+set -eumo pipefail
 
 sleep 999999999 &
 SANDBOX_PID=$!
@@ -103,11 +111,11 @@ ln -s /proc/${SANDBOX_PID}/root/bin/ /proc/1/root/.cdebug-{{ .ID }}
 
 export PATH=$PATH:/.cdebug-{{ .ID }}
 
-chroot /proc/1/root sh
+chroot /proc/1/root {{ .Cmd }}
 `))
 
 	chrootProgramNixery = template.Must(template.New("nixery-chroot").Parse(`
-set -euxo pipefail
+set -eumo pipefail
 
 sleep 999999999 &
 SANDBOX_PID=$!
@@ -119,7 +127,7 @@ ln -s /proc/${SANDBOX_PID}/root/bin /proc/1/root/.cdebug-{{ .ID }}
 
 export PATH=$PATH:/.cdebug-{{ .ID }}
 
-chroot /proc/1/root sh
+chroot /proc/1/root {{ .Cmd }}
 `))
 )
 
@@ -154,13 +162,25 @@ func runDebugger(ctx context.Context, cli cmd.CLI, opts *options) error {
 						return chrootProgramNixery
 					}
 					return chrootProgramBusybox
-				}(), map[string]string{"ID": runID}),
+				}(), map[string]string{
+					"ID": runID,
+					"Cmd": func() string {
+						// TODO: Use `sh -i` when -it is passed.
+						if len(opts.cmd) == 0 {
+							return "sh"
+						}
+						return "sh -c '" + strings.Join(shellescape(opts.cmd), " ") + "'"
+					}(),
+				}),
 			},
-			// AttachStdin: true,
-			OpenStdin: opts.stdin,
 			Tty:       opts.tty,
+			OpenStdin: opts.stdin,
+			// AttachStdin: true,
+			AttachStdout: true,
+			AttachStderr: true,
 		},
 		&container.HostConfig{
+			Privileged:  opts.privileged,
 			NetworkMode: container.NetworkMode(target),
 			PidMode:     container.PidMode(target),
 			UTSMode:     container.UTSMode(target),
@@ -174,13 +194,11 @@ func runDebugger(ctx context.Context, cli cmd.CLI, opts *options) error {
 		return fmt.Errorf("cannot create debugger container: %w", err)
 	}
 
-	if opts.stdin || opts.tty {
-		close, err := attachDebugger(ctx, cli, client, opts, resp.ID)
-		if err != nil {
-			return fmt.Errorf("cannot attach to debugger container: %w", err)
-		}
-		defer close()
+	close, err := attachDebugger(ctx, cli, client, opts, resp.ID)
+	if err != nil {
+		return fmt.Errorf("cannot attach to debugger container: %w", err)
 	}
+	defer close()
 
 	if err := client.ContainerStart(ctx, resp.ID, types.ContainerStartOptions{}); err != nil {
 		return fmt.Errorf("cannot start debugger container: %w", err)
@@ -275,23 +293,36 @@ type ioStreamer struct {
 }
 
 func (s *ioStreamer) stream(ctx context.Context) error {
-	// TODO: check stdin && tty flags
-	s.streams.InputStream().SetRawTerminal()
-	s.streams.OutputStream().SetRawTerminal()
-	defer func() {
-		s.streams.InputStream().RestoreTerminal()
-		s.streams.OutputStream().RestoreTerminal()
-	}()
+	if s.tty {
+		s.streams.InputStream().SetRawTerminal()
+		s.streams.OutputStream().SetRawTerminal()
+		defer func() {
+			s.streams.InputStream().RestoreTerminal()
+			s.streams.OutputStream().RestoreTerminal()
+		}()
+	}
 
 	inDone := make(chan error)
 	go func() {
-		io.Copy(s.resp.Conn, s.inputStream)
+		if s.stdin {
+			if _, err := io.Copy(s.resp.Conn, s.inputStream); err != nil {
+				logrus.Debugf("Error forwarding stdin: %s", err)
+			}
+		}
 		close(inDone)
 	}()
 
 	outDone := make(chan error)
 	go func() {
-		io.Copy(s.outputStream, s.resp.Reader)
+		var err error
+		if s.tty {
+			_, err = io.Copy(s.outputStream, s.resp.Reader)
+		} else {
+			_, err = stdcopy.StdCopy(s.outputStream, s.errorStream, s.resp.Reader)
+		}
+		if err != nil {
+			logrus.Debugf("Error forwarding stdout/stderr: %s", err)
+		}
 		close(outDone)
 	}()
 
@@ -325,4 +356,15 @@ func mustRenderTemplate(t *template.Template, data any) string {
 		panic(fmt.Errorf("cannot render template %q: %w", t.Name(), err))
 	}
 	return buf.String()
+}
+
+// FIXME: Too naive. This will break for args containing escaped symbols.
+func shellescape(args []string) (escaped []string) {
+	for _, a := range args {
+		if strings.ContainsAny(a, " \t\n\r") {
+			a = `"` + a + `"`
+		}
+		escaped = append(escaped, a)
+	}
+	return
 }

@@ -90,13 +90,21 @@ PID   USER     TIME  COMMAND
    45 root      0:00 ps auxf
 ```
 
-## Demo 2: An interactive shell with advanced tools and code editor
+## Demo 2: An interactive shell with code editor
 
 If the tools provided by busybox aren't enough, you can bring your own tools with
 a ~~little~~ huge help of the [nixery](https://nixery.dev/) project:
 
 ```sh
-cdebug exec -it --image nixery.dev/shell/ps/findutils/tcpdump/vim my-distroless
+cdebug exec -it --image nixery.dev/shell/vim my-distroless
+```
+
+## Demo 3: An interactive shell with tshark and other advanced tools
+
+Even more powerful exammple:
+
+```sh
+cdebug exec -it --image nixery.dev/shell/ps/findutils/tshark my-distroless
 ```
 
 ## How it works
@@ -131,7 +139,7 @@ The secret sauce is the symlink + PATH modification + chroot-ing.
 
 - Make exec accept (partial) container IDs (only names are supported at the moment)
 - Terminal resizing ([example](https://github.com/docker/cli/blob/110c4d92b883357c9fb3edc344c4fbec5f77896f/cli/command/container/tty.go#L71))
-- More `exec` flags (like in `docker run`): `--privileged`, `--volume`, `--env`, etc.
+- More `exec` flags (like in `docker run`): `--volume`, `--env`, etc.
 - Helper command(s) suggesting nix(ery) packages
 - E2E Tests
 - Cross-platform builds + goreleaser
