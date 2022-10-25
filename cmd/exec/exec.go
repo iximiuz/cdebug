@@ -39,6 +39,7 @@ type options struct {
 	stdin      bool
 	cmd        []string
 	privileged bool
+	autoRemove bool
 }
 
 func NewCommand(cli cmd.CLI) *cobra.Command {
@@ -91,6 +92,12 @@ func NewCommand(cli cmd.CLI) *cobra.Command {
 		"privileged",
 		false,
 		"God mode for the debugger container (as in `docker run --privileged`)",
+	)
+	flags.BoolVar(
+		&opts.autoRemove,
+		"rm",
+		false,
+		"Automatically remove the container when it exits (as in `docker run --rm`)",
 	)
 
 	return cmd
@@ -165,7 +172,9 @@ func runDebugger(ctx context.Context, cli cmd.CLI, opts *options) error {
 			AttachStderr: true,
 		},
 		&container.HostConfig{
-			Privileged:  opts.privileged,
+			Privileged: opts.privileged,
+			AutoRemove: opts.autoRemove,
+
 			NetworkMode: container.NetworkMode(target),
 			PidMode:     container.PidMode(target),
 			UTSMode:     container.UTSMode(target),

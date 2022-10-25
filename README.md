@@ -139,7 +139,7 @@ The secret sauce is the symlink + PATH modification + chroot-ing.
 
 - Make exec accept (partial) container IDs (only names are supported at the moment)
 - Terminal resizing ([example](https://github.com/docker/cli/blob/110c4d92b883357c9fb3edc344c4fbec5f77896f/cli/command/container/tty.go#L71))
-- More `exec` flags (like in `docker run`): `--volume`, `--env`, etc.
+- More `exec` flags (like in `docker run`): `--cap-add`, `--cap-drop`, `--env`, `--volume`, etc.
 - Helper command(s) suggesting nix(ery) packages
 - E2E Tests
 - Cross-platform builds + goreleaser
