@@ -7,8 +7,8 @@ import (
 	"github.com/moby/term"
 	"github.com/spf13/cobra"
 
-	"github.com/iximiuz/cdebug/cmd"
 	"github.com/iximiuz/cdebug/cmd/exec"
+	"github.com/iximiuz/cdebug/pkg/cmd"
 )
 
 func main() {

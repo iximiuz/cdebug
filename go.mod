@@ -6,6 +6,7 @@ require (
 	github.com/docker/cli v20.10.20+incompatible
 	github.com/docker/docker v20.10.20+incompatible
 	github.com/google/uuid v1.3.0
+	github.com/moby/sys/signal v0.7.0
 	github.com/moby/term v0.0.0-20220808134915-39b0c02b01ae
 	github.com/sirupsen/logrus v1.9.0
 	github.com/spf13/cobra v1.6.0

@@ -16,7 +16,8 @@ import (
 	"github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 
-	"github.com/iximiuz/cdebug/cmd"
+	"github.com/iximiuz/cdebug/pkg/cmd"
+	"github.com/iximiuz/cdebug/pkg/tty"
 )
 
 // cdebug exec [--image busybox] <CONT> [CMD]
@@ -165,9 +166,9 @@ func runDebugger(ctx context.Context, cli cmd.CLI, opts *options) error {
 					},
 				),
 			},
-			Tty:       opts.tty,
-			OpenStdin: opts.stdin,
-			// AttachStdin: true,
+			Tty:          opts.tty,
+			OpenStdin:    opts.stdin,
+			AttachStdin:  opts.stdin,
 			AttachStdout: true,
 			AttachStderr: true,
 		},
@@ -196,6 +197,10 @@ func runDebugger(ctx context.Context, cli cmd.CLI, opts *options) error {
 
 	if err := client.ContainerStart(ctx, resp.ID, types.ContainerStartOptions{}); err != nil {
 		return fmt.Errorf("cannot start debugger container: %w", err)
+	}
+
+	if opts.tty && cli.OutputStream().IsTerminal() {
+		tty.StartResizing(ctx, cli.OutputStream(), client, resp.ID)
 	}
 
 	statusCh, errCh := client.ContainerWait(ctx, resp.ID, container.WaitConditionNotRunning)
