@@ -131,12 +131,21 @@ func runDebugger(ctx context.Context, cli cmd.CLI, opts *options) error {
 		return fmt.Errorf("cannot initialize Docker client: %w", err)
 	}
 
+	target, err := client.ContainerInspect(ctx, opts.target)
+	if err != nil {
+		return fmt.Errorf("cannot inspect target container: %w", err)
+	}
+
+	if target.State == nil || !target.State.Running {
+		return fmt.Errorf("target container found but it's not running")
+	}
+
 	if err := pullImage(ctx, cli, client, opts.image); err != nil {
 		return err
 	}
 
 	runID := shortID()
-	target := "container:" + opts.target
+	nsMode := "container:" + target.ID
 	resp, err := client.ContainerCreate(
 		ctx,
 		&container.Config{
@@ -168,10 +177,12 @@ func runDebugger(ctx context.Context, cli cmd.CLI, opts *options) error {
 			Privileged: opts.privileged,
 			AutoRemove: opts.autoRemove,
 
-			NetworkMode: container.NetworkMode(target),
-			PidMode:     container.PidMode(target),
-			UTSMode:     container.UTSMode(target),
-			// TODO: IpcMode:     container.IpcMode("container:my-distroless"),
+			NetworkMode: container.NetworkMode(nsMode),
+			PidMode:     container.PidMode(nsMode),
+			UTSMode:     container.UTSMode(nsMode),
+			// TODO: CgroupnsMode: container.CgroupnsMode(nsMode),
+			// TODO: IpcMode:      container.IpcMode(nsMode)
+			// TODO: UsernsMode:   container.UsernsMode(target)
 		},
 		nil,
 		nil,
