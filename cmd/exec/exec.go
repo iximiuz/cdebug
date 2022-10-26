@@ -20,14 +20,6 @@ import (
 	"github.com/iximiuz/cdebug/pkg/tty"
 )
 
-// cdebug exec [--image busybox] <CONT> [CMD]
-// cdebug exec [-it] --image nixery.dev/shell/ps <CONT> [CMD]
-
-// cdebug images
-//   - busybox
-//   - alpine
-//   - nixery:shell/ps
-
 const (
 	defaultToolkitImage = "docker.io/library/busybox:latest"
 )
@@ -98,7 +90,7 @@ func NewCommand(cli cmd.CLI) *cobra.Command {
 		&opts.autoRemove,
 		"rm",
 		false,
-		"Automatically remove the container when it exits (as in `docker run --rm`)",
+		"Automatically remove the debugger container when it exits (as in `docker run --rm`)",
 	)
 
 	return cmd
@@ -148,9 +140,9 @@ func runDebugger(ctx context.Context, cli cmd.CLI, opts *options) error {
 	resp, err := client.ContainerCreate(
 		ctx,
 		&container.Config{
-			Image: opts.image,
+			Image:      opts.image,
+			Entrypoint: []string{"sh"},
 			Cmd: []string{
-				"sh",
 				"-c",
 				mustRenderTemplate(
 					chrootEntrypoint,
