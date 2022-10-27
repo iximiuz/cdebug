@@ -8,6 +8,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/iximiuz/cdebug/cmd/exec"
+	"github.com/iximiuz/cdebug/cmd/portforward"
 	"github.com/iximiuz/cdebug/pkg/cmd"
 )
 
@@ -22,7 +23,8 @@ func main() {
 
 	cmd.AddCommand(
 		exec.NewCommand(cli),
-	// TODO: other commands
+		portforward.NewCommand(cli),
+		// TODO: other commands
 	)
 
 	if err := cmd.Execute(); err != nil {

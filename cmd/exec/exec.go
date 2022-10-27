@@ -12,12 +12,12 @@ import (
 	"github.com/docker/docker/api/types/container"
 	dockerclient "github.com/docker/docker/client"
 	"github.com/docker/docker/pkg/stdcopy"
-	"github.com/google/uuid"
 	"github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 
 	"github.com/iximiuz/cdebug/pkg/cmd"
 	"github.com/iximiuz/cdebug/pkg/tty"
+	"github.com/iximiuz/cdebug/pkg/util"
 )
 
 const (
@@ -144,7 +144,7 @@ func runDebugger(ctx context.Context, cli cmd.CLI, opts *options) error {
 		return err
 	}
 
-	runID := shortID()
+	runID := util.ShortID()
 	nsMode := "container:" + target.ID
 	resp, err := client.ContainerCreate(
 		ctx,
@@ -346,10 +346,6 @@ func debuggerName(name string, runID string) string {
 		return name
 	}
 	return "cdebug-" + runID
-}
-
-func shortID() string {
-	return strings.Split(uuid.NewString(), "-")[0]
 }
 
 func mustRenderTemplate(t *template.Template, data any) string {
