@@ -19,8 +19,20 @@ import (
 //   - parse ports args
 //   - handle non-default network case
 //   - handle exposing localhost ports
-//       cdebug exec --name helper --image socat <target> <target-port> <random-port>
-//       cdebug port-forward helper <host-port>:<random-port>
+//       cdebug exec --name helper --image socat <target> <target-port> <proxy-port>
+//       cdebug port-forward helper <host-port>:<proxy-port>
+
+// Possible options (kinda sorta as in ssh -L):
+//   - TARGET_PORT                                # binds TARGET_IP:TARGET_PORT to a random port on localhost
+//   - TARGET_IP:TARGET_PORT                      # The second form is needed to:
+//                                                #  1) allow target's localhost ports expose
+//                                                #  2) specify a concrete IP if a multi-network target listens on 0.0.0.0
+//
+//   - LOCAL_PORT:TARGET_PORT                     # binds TARGET_IP:TARGET_PORT to LOCAL_PORT on localhost
+//   - LOCAL_PORT:TARGET_IP:TARGET_PORT
+//
+//   - LOCAL_IP:LOCAL_PORT:TARGET_PORT            # binds TARGET_IP:TARGET_PORT to LOCAL_PORT on LOCAL_IP
+//   - LOCAL_IP:LOCAL_PORT:TARGET_IP:TARGET_PORT
 
 const (
 	helperImage = "nixery.dev/socat:latest"
@@ -36,7 +48,7 @@ func NewCommand(cli cmd.CLI) *cobra.Command {
 	var opts options
 
 	cmd := &cobra.Command{
-		Use:   "port-forward [OPTIONS] CONTAINER [LOCAL_PORT:]REMOTE_PORT [...[LOCAL_PORT_N:]REMOTE_PORT_N]",
+		Use:   "port-forward [OPTIONS] CONTAINER [LOCAL_PORT:]TARGET_PORT [...[LOCAL_PORT_N:]TARGET_PORT_N]",
 		Short: "Publish a port of an already running container (kind of)",
 		Args:  cobra.MinimumNArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
