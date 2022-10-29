@@ -114,7 +114,7 @@ export PATH=$PATH:/.cdebug-{{ .ID }}
 chroot /proc/1/root {{ .Cmd }}
 EOF
 
-sh /.cdebug-entrypoint.sh
+exec sh /.cdebug-entrypoint.sh
 `))
 )
 
