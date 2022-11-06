@@ -5,6 +5,7 @@ go 1.18
 require (
 	github.com/docker/cli v20.10.20+incompatible
 	github.com/docker/docker v20.10.20+incompatible
+	github.com/docker/go-connections v0.4.0
 	github.com/google/uuid v1.3.0
 	github.com/moby/sys/signal v0.7.0
 	github.com/moby/term v0.0.0-20220808134915-39b0c02b01ae
@@ -16,7 +17,6 @@ require (
 	github.com/Azure/go-ansiterm v0.0.0-20210617225240-d185dfc1b5a1 // indirect
 	github.com/Microsoft/go-winio v0.6.0 // indirect
 	github.com/docker/distribution v2.8.1+incompatible // indirect
-	github.com/docker/go-connections v0.4.0 // indirect
 	github.com/docker/go-units v0.5.0 // indirect
 	github.com/gogo/protobuf v1.3.2 // indirect
 	github.com/google/go-cmp v0.5.5 // indirect

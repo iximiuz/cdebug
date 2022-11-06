@@ -12,13 +12,20 @@ import (
 	"github.com/iximiuz/cdebug/pkg/cmd"
 )
 
+var (
+	version = "dev"
+	commit  = "none"
+	date    = "unknown"
+)
+
 func main() {
 	stdin, stdout, stderr := term.StdStreams()
 	cli := cmd.NewCLI(stdin, stdout, stderr)
 
 	cmd := &cobra.Command{
-		Use:   "cdebug [OPTIONS] COMMAND [ARG...]",
-		Short: "The base command for the cdebug CLI.",
+		Use:     "cdebug [OPTIONS] COMMAND [ARG...]",
+		Short:   "The base command for the cdebug CLI.",
+		Version: fmt.Sprintf("%s (built: %s commit: %s)", version, date, commit),
 	}
 
 	cmd.AddCommand(
