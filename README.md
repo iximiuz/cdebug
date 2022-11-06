@@ -128,6 +128,13 @@ EOF
 
 The secret sauce is the symlink + PATH modification + chroot-ing.
 
+## F.A.Q
+
+**Q:** Running `cdebug exec` fails with `rm: cannot remove '/proc/1/root/nix': Permission denied` or
+`ln: /proc/1/root/.cdebug-XXXXXXXX: Permission denied`.
+
+Chances are your target container has been started with elevated permissions while you're trying to run a non-privileged debugger sidecar. Try `cdebug exec --privileged` instead.
+
 ## Similar tools
 
 - [`docker-slim debug`](https://github.com/docker-slim/docker-slim) - a PoC `debug` command for DockerSlim (contributed by [D4N](https://github.com/D4N))

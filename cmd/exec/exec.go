@@ -3,6 +3,7 @@ package exec
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"strings"
@@ -174,7 +175,10 @@ func runDebugger(ctx context.Context, cli cmd.CLI, opts *options) error {
 			AttachStderr: true,
 		},
 		&container.HostConfig{
-			Privileged: opts.privileged,
+			Privileged: target.HostConfig.Privileged || opts.privileged,
+			CapAdd:     target.HostConfig.CapAdd,
+			CapDrop:    target.HostConfig.CapDrop,
+
 			AutoRemove: opts.autoRemove,
 
 			NetworkMode: container.NetworkMode(nsMode),
@@ -365,4 +369,9 @@ func shellescape(args []string) (escaped []string) {
 		escaped = append(escaped, a)
 	}
 	return
+}
+
+func pprint(v any) {
+	b, _ := json.MarshalIndent(v, "", "  ")
+	fmt.Println(string(b))
 }
