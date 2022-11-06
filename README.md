@@ -33,6 +33,25 @@ Supported runtimes:
 - Kubernetes (via the API server) - coming later
 - runc or alike (via directly invoking the CLI) - coming later.
 
+## Installation
+
+It's a statically linked Go binary, so you know the drill:
+
+```sh
+GOOS=linux
+GOARCH=amd64
+
+curl -Ls https://github.com/iximiuz/cdebug/releases/latest/download/cdebug_${GOOS}_${GOARCH}.tar.gz | tar xvz
+
+sudo mv cdebug /usr/local/bin
+```
+
+At the moment, the following targets are (kinda sorta) supported:
+
+- linux/amd64
+- darwin/amd64
+- darwin/arm64
+
 ## Demo 1: An interactive shell with busybox
 
 First, a target container is needed. Let's use a distroless nodejs image for that:
