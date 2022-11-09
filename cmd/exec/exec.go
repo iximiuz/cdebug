@@ -3,7 +3,6 @@ package exec
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"strings"
@@ -369,9 +368,4 @@ func shellescape(args []string) (escaped []string) {
 		escaped = append(escaped, a)
 	}
 	return
-}
-
-func pprint(v any) {
-	b, _ := json.MarshalIndent(v, "", "  ")
-	fmt.Println(string(b))
 }

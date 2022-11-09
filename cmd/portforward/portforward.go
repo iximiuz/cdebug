@@ -5,12 +5,17 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
+	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
 	dockerclient "github.com/docker/docker/client"
 	"github.com/docker/go-connections/nat"
+	"github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 
 	"github.com/iximiuz/cdebug/pkg/cmd"
@@ -80,7 +85,7 @@ func runPortForward(ctx context.Context, cli cmd.CLI, opts *options) error {
 		return err
 	}
 
-	forwardings, err := prepareForwardings(target, opts.forwardings)
+	forwardings, err := parseForwardings(target, opts.forwardings)
 	if err != nil {
 		return err
 	}
@@ -90,6 +95,18 @@ func runPortForward(ctx context.Context, cli cmd.CLI, opts *options) error {
 		return err
 	}
 
+	fmt.Println("forwardings")
+	util.PrettyPrint(forwardings)
+
+	fmt.Println("forwardings.toDockerPortSpecs()")
+	util.PrettyPrint(forwardings.toDockerPortSpecs())
+
+	fmt.Println("exposedPorts")
+	util.PrettyPrint(exposedPorts)
+
+	fmt.Println("portBindings")
+	util.PrettyPrint(portBindings)
+
 	// TODO: Iterate over all forwardings.
 	resp, err := client.ContainerCreate(
 		ctx,
@@ -98,7 +115,7 @@ func runPortForward(ctx context.Context, cli cmd.CLI, opts *options) error {
 			Entrypoint: []string{"socat"},
 			Cmd: []string{
 				fmt.Sprintf("TCP-LISTEN:%s,fork", forwardings[0].targetPort),
-				fmt.Sprintf("TCP-CONNECT:%s:%d", forwardings[0].targetIP, forwardings[0].targetPort),
+				fmt.Sprintf("TCP-CONNECT:%s:%s", forwardings[0].targetIP, forwardings[0].targetPort),
 			},
 			ExposedPorts: exposedPorts,
 		},
@@ -118,7 +135,32 @@ func runPortForward(ctx context.Context, cli cmd.CLI, opts *options) error {
 		return fmt.Errorf("cannot start port-forwarder container: %w", err)
 	}
 
-	// TODO: Handle ctrl + C and other signals.
+	forwarder, err := client.ContainerInspect(ctx, resp.ID)
+	if err != nil {
+		return fmt.Errorf("cannot inspect forwarder container: %w", err)
+	}
+	// TODO: Multi-network support.
+	targetIP := target.NetworkSettings.Networks["bridge"].IPAddress
+	for from, frontends := range forwarder.NetworkSettings.Ports {
+		for _, frontend := range frontends {
+			fmt.Printf("Forwarding %s to %s's %s:%s\n", net.JoinHostPort(frontend.HostIP, frontend.HostPort), target.Name[1:], targetIP, from)
+		}
+	}
+
+	sigCh := make(chan os.Signal, 128)
+	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
+	defer close(sigCh)
+
+	go func() {
+		for _ = range sigCh {
+			fmt.Println("Exiting...")
+			if err := client.ContainerKill(ctx, resp.ID, "KILL"); err != nil {
+				logrus.WithError(err).Warn("Cannot kill forwarder container")
+			}
+			break
+		}
+	}()
+
 	forwarderStatusCh, forwarderErrCh := client.ContainerWait(ctx, resp.ID, container.WaitConditionNotRunning)
 	// targetStatusCh, targetErrCh := client.ContainerWait(ctx, target.ID, container.WaitConditionNotRunning)
 	select {
@@ -166,7 +208,7 @@ func (list forwardingList) toDockerPortSpecs() []string {
 	return spec
 }
 
-func prepareForwardings(
+func parseForwardings(
 	target types.ContainerJSON,
 	forwardings []string,
 ) (forwardingList, error) {
