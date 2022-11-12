@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 	"text/template"
 
@@ -144,7 +145,6 @@ func runDebugger(ctx context.Context, cli cliutil.CLI, opts *options) error {
 	if err != nil {
 		return err
 	}
-
 	if target.State == nil || !target.State.Running {
 		return errors.New("target container found but it's not running")
 	}
@@ -163,6 +163,7 @@ func runDebugger(ctx context.Context, cli cliutil.CLI, opts *options) error {
 			Cmd: []string{
 				"-c",
 				mustRenderTemplate(
+					cli,
 					chrootEntrypoint,
 					map[string]any{
 						"ID":    runID,
@@ -270,7 +271,7 @@ func attachDebugger(
 		}
 
 		if err := s.stream(ctx); err != nil {
-			logrus.WithError(err).Warn("ioStreamer.stream() failed")
+			logrus.Debugf("ioStreamer.stream() failed: %s", err)
 		}
 	}()
 
@@ -344,10 +345,11 @@ func debuggerName(name string, runID string) string {
 	return "cdebug-" + runID
 }
 
-func mustRenderTemplate(t *template.Template, data any) string {
+func mustRenderTemplate(cli cliutil.CLI, t *template.Template, data any) string {
 	var buf bytes.Buffer
 	if err := t.Execute(&buf, data); err != nil {
-		panic(fmt.Errorf("cannot render template %q: %w", t.Name(), err))
+		cli.PrintErr("Cannot render template %q: %w", t.Name(), err)
+		os.Exit(1)
 	}
 	return buf.String()
 }

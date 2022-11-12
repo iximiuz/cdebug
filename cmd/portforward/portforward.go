@@ -103,8 +103,9 @@ func runPortForward(ctx context.Context, cli cliutil.CLI, opts *options) error {
 	if err != nil {
 		return err
 	}
-
-	// TODO: Check that target has at least 1 IP!
+	if target.State == nil || !target.State.Running {
+		return errors.New("target container found but it's not running")
+	}
 
 	if err := client.ImagePullEx(ctx, helperImage, types.ImagePullOptions{}); err != nil {
 		return fmt.Errorf("cannot pull port-forwarder helper image %q: %w", helperImage, err)
@@ -153,27 +154,7 @@ func runPortForward(ctx context.Context, cli cliutil.CLI, opts *options) error {
 		return fmt.Errorf("cannot inspect forwarder container: %w", err)
 	}
 
-	// TODO: Multi-network support.
-	targetIP := target.NetworkSettings.Networks["bridge"].IPAddress
-	for remotePort, localBindings := range forwarder.NetworkSettings.Ports {
-		for _, binding := range localBindings {
-			switch opts.output {
-			case outFormatText:
-				local := net.JoinHostPort(binding.HostIP, binding.HostPort)
-				remote := targetIP + ":" + string(remotePort)
-				cli.PrintOut("Forwarding %s to %s's %s\n", local, target.Name[1:], remote)
-			case outFormatJSON:
-				cli.PrintOut(jsonutil.Dump(map[string]string{
-					"localHost":  binding.HostIP,
-					"localPort":  binding.HostPort,
-					"remoteHost": targetIP,
-					"remotePort": string(remotePort),
-				}))
-			default:
-				panic("unreachable!")
-			}
-		}
-	}
+	output(cli, forwardings, forwarder, opts.output)
 
 	sigCh := make(chan os.Signal, 128)
 	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
@@ -201,6 +182,34 @@ func runPortForward(ctx context.Context, cli cliutil.CLI, opts *options) error {
 	}
 
 	return nil
+}
+
+func output(
+	cli cliutil.CLI,
+	forwardings forwardingList,
+	forwarder types.ContainerJSON,
+	outFormat string,
+) {
+	targetIP := target.NetworkSettings.Networks["bridge"].IPAddress
+	for remotePort, localBindings := range forwarder.NetworkSettings.Ports {
+		for _, binding := range localBindings {
+			switch opts.output {
+			case outFormatText:
+				local := net.JoinHostPort(binding.HostIP, binding.HostPort)
+				remote := targetIP + ":" + string(remotePort)
+				cli.PrintOut("Forwarding %s to %s's %s\n", local, target.Name[1:], remote)
+			case outFormatJSON:
+				cli.PrintOut(jsonutil.Dump(map[string]string{
+					"localHost":  binding.HostIP,
+					"localPort":  binding.HostPort,
+					"remoteHost": targetIP,
+					"remotePort": string(remotePort),
+				}))
+			default:
+				panic("unreachable!")
+			}
+		}
+	}
 }
 
 type forwarding struct {
