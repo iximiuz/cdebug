@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"net"
 	"os"
 	"os/signal"
@@ -13,14 +12,14 @@ import (
 
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
-	dockerclient "github.com/docker/docker/client"
 	"github.com/docker/go-connections/nat"
 	"github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 
 	"github.com/iximiuz/cdebug/pkg/cliutil"
+	"github.com/iximiuz/cdebug/pkg/docker"
 	"github.com/iximiuz/cdebug/pkg/jsonutil"
-	"github.com/iximiuz/cdebug/pkg/util"
+	"github.com/iximiuz/cdebug/pkg/uuid"
 )
 
 // TODO:
@@ -95,21 +94,20 @@ func NewCommand(cli cliutil.CLI) *cobra.Command {
 }
 
 func runPortForward(ctx context.Context, cli cliutil.CLI, opts *options) error {
-	client, err := dockerclient.NewClientWithOpts(
-		dockerclient.FromEnv,
-		dockerclient.WithAPIVersionNegotiation(),
-	)
+	client, err := docker.NewClient(cli.AuxStream())
 	if err != nil {
-		return fmt.Errorf("cannot initialize Docker client: %w", err)
+		return err
 	}
 
 	target, err := client.ContainerInspect(ctx, opts.target)
 	if err != nil {
-		return fmt.Errorf("cannot inspect target container: %w", err)
+		return err
 	}
 
-	if err := pullImage(ctx, cli, client, helperImage); err != nil {
-		return err
+	// TODO: Check that target has at least 1 IP!
+
+	if err := client.ImagePullEx(ctx, helperImage, types.ImagePullOptions{}); err != nil {
+		return fmt.Errorf("cannot pull port-forwarder helper image %q: %w", helperImage, err)
 	}
 
 	forwardings, err := parseForwardings(target, opts.forwardings)
@@ -140,7 +138,7 @@ func runPortForward(ctx context.Context, cli cliutil.CLI, opts *options) error {
 		},
 		nil,
 		nil,
-		"port-forwarder-"+util.ShortID(),
+		"port-forwarder-"+uuid.ShortID(),
 	)
 	if err != nil {
 		return fmt.Errorf("cannot create port-forwarder container: %w", err)
@@ -163,9 +161,9 @@ func runPortForward(ctx context.Context, cli cliutil.CLI, opts *options) error {
 			case outFormatText:
 				local := net.JoinHostPort(binding.HostIP, binding.HostPort)
 				remote := targetIP + ":" + string(remotePort)
-				cli.Say("Forwarding %s to %s's %s\n", local, target.Name[1:], remote)
+				cli.PrintOut("Forwarding %s to %s's %s\n", local, target.Name[1:], remote)
 			case outFormatJSON:
-				cli.Say(jsonutil.Dump(map[string]string{
+				cli.PrintOut(jsonutil.Dump(map[string]string{
 					"localHost":  binding.HostIP,
 					"localPort":  binding.HostPort,
 					"remoteHost": targetIP,
@@ -183,7 +181,7 @@ func runPortForward(ctx context.Context, cli cliutil.CLI, opts *options) error {
 
 	go func() {
 		for _ = range sigCh {
-			cli.Wisper("Exiting...")
+			cli.PrintAux("Exiting...")
 
 			if err := client.ContainerKill(ctx, resp.ID, "KILL"); err != nil {
 				logrus.Debugf("Cannot kill forwarder container: %s", err)
@@ -197,28 +195,12 @@ func runPortForward(ctx context.Context, cli cliutil.CLI, opts *options) error {
 	select {
 	case err := <-forwarderErrCh:
 		if err != nil {
-			return fmt.Errorf("waiting port-forwarder container failed: %w", err)
+			return fmt.Errorf("waiting for port-forwarder container failed: %w", err)
 		}
 	case <-forwarderStatusCh:
 	}
 
 	return nil
-}
-
-func pullImage(
-	ctx context.Context,
-	cli cliutil.CLI,
-	client *dockerclient.Client,
-	image string,
-) error {
-	resp, err := client.ImagePull(ctx, image, types.ImagePullOptions{})
-	if err != nil {
-		return fmt.Errorf("cannot pull port-forwarder helper image %q: %w", image, err)
-	}
-	defer resp.Close()
-
-	_, err = io.Copy(cli.OutputStream(), resp)
-	return err
 }
 
 type forwarding struct {

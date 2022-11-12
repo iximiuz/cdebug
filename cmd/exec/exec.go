@@ -11,14 +11,14 @@ import (
 
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
-	dockerclient "github.com/docker/docker/client"
 	"github.com/docker/docker/pkg/stdcopy"
 	"github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 
 	"github.com/iximiuz/cdebug/pkg/cliutil"
+	"github.com/iximiuz/cdebug/pkg/docker"
 	"github.com/iximiuz/cdebug/pkg/tty"
-	"github.com/iximiuz/cdebug/pkg/util"
+	"github.com/iximiuz/cdebug/pkg/uuid"
 )
 
 const (
@@ -135,10 +135,7 @@ func runDebugger(ctx context.Context, cli cliutil.CLI, opts *options) error {
 		return err
 	}
 
-	client, err := dockerclient.NewClientWithOpts(
-		dockerclient.FromEnv,
-		dockerclient.WithAPIVersionNegotiation(),
-	)
+	client, err := docker.NewClient(cli.AuxStream())
 	if err != nil {
 		return err
 	}
@@ -152,11 +149,11 @@ func runDebugger(ctx context.Context, cli cliutil.CLI, opts *options) error {
 		return errors.New("target container found but it's not running")
 	}
 
-	if err := pullImage(ctx, cli, client, opts.image); err != nil {
-		return err
+	if err := client.ImagePullEx(ctx, opts.image, types.ImagePullOptions{}); err != nil {
+		return fmt.Errorf("cannot pull debugger image %q: %w", opts.image, err)
 	}
 
-	runID := util.ShortID()
+	runID := uuid.ShortID()
 	nsMode := "container:" + target.ID
 	resp, err := client.ContainerCreate(
 		ctx,
@@ -233,26 +230,10 @@ func runDebugger(ctx context.Context, cli cliutil.CLI, opts *options) error {
 	return nil
 }
 
-func pullImage(
-	ctx context.Context,
-	cli cliutil.CLI,
-	client *dockerclient.Client,
-	image string,
-) error {
-	resp, err := client.ImagePull(ctx, image, types.ImagePullOptions{})
-	if err != nil {
-		return fmt.Errorf("cannot pull debugger image %q: %w", image, err)
-	}
-	defer resp.Close()
-
-	_, err = io.Copy(cli.OutputStream(), resp)
-	return err
-}
-
 func attachDebugger(
 	ctx context.Context,
 	cli cliutil.CLI,
-	client *dockerclient.Client,
+	client *docker.Client,
 	opts *options,
 	contID string,
 ) (func(), error) {

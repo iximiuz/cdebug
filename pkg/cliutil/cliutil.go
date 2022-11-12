@@ -11,6 +11,7 @@ import (
 type Streams interface {
 	InputStream() *streams.In
 	OutputStream() *streams.Out
+	AuxStream() *streams.Out // ErrorStream unless quiet else io.Discard
 	ErrorStream() io.Writer
 }
 
@@ -20,21 +21,20 @@ type CLI interface {
 	SetQuiet(bool)
 
 	// Regular print to stdout.
-	Say(string, ...any)
+	PrintOut(string, ...any)
 
 	// Regular print to stderr.
-	Grumble(string, ...any)
+	PrintErr(string, ...any)
 
-	// Optional print to stderr (unless quiet).
-	Wisper(string, ...any)
+	// Print to stderr unless quiet else - discard.
+	PrintAux(string, ...any)
 }
 
 type cli struct {
 	inputStream  *streams.In
 	outputStream *streams.Out
+	auxStream    *streams.Out
 	errorStream  io.Writer
-
-	quiet bool
 }
 
 var _ CLI = &cli{}
@@ -43,6 +43,7 @@ func NewCLI(cin io.ReadCloser, cout io.Writer, cerr io.Writer) CLI {
 	return &cli{
 		inputStream:  streams.NewIn(cin),
 		outputStream: streams.NewOut(cout),
+		auxStream:    streams.NewOut(cerr),
 		errorStream:  cerr,
 	}
 }
@@ -55,26 +56,32 @@ func (c *cli) OutputStream() *streams.Out {
 	return c.outputStream
 }
 
+func (c *cli) AuxStream() *streams.Out {
+	return c.auxStream
+}
+
 func (c *cli) ErrorStream() io.Writer {
 	return c.errorStream
 }
 
 func (c *cli) SetQuiet(v bool) {
-	c.quiet = v
+	if v {
+		c.auxStream = streams.NewOut(io.Discard)
+	} else {
+		c.auxStream = streams.NewOut(c.errorStream)
+	}
 }
 
-func (c *cli) Say(format string, a ...any) {
+func (c *cli) PrintOut(format string, a ...any) {
 	fmt.Fprintf(c.OutputStream(), format, a...)
 }
 
-func (c *cli) Grumble(format string, a ...any) {
+func (c *cli) PrintErr(format string, a ...any) {
 	fmt.Fprintf(c.ErrorStream(), format, a...)
 }
 
-func (c *cli) Wisper(format string, a ...any) {
-	if !c.quiet {
-		fmt.Fprintf(c.ErrorStream(), format, a...)
-	}
+func (c *cli) PrintAux(format string, a ...any) {
+	fmt.Fprintf(c.AuxStream(), format, a...)
 }
 
 type StatusError struct {

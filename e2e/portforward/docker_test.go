@@ -28,7 +28,7 @@ func TestPortForwardDockerRemotePort(t *testing.T) {
 	defer func() { removeContainer(t, targetID).Assert(t, icmd.Success) }()
 
 	// Initiate port forwarding.
-	cmd := icmd.Command("cdebug", "port-forward", "-o", "json", targetID, "80")
+	cmd := icmd.Command("cdebug", "port-forward", "-q", "-o", "json", targetID, "80")
 	res := icmd.StartCmd(cmd)
 	assert.NilError(t, res.Error)
 	defer func() { icmd.WaitOnCmd(cmd.Timeout, res).Assert(t, icmd.Success) }()

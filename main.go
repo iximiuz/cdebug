@@ -58,12 +58,12 @@ func main() {
 
 	if err := cmd.Execute(); err != nil {
 		if sterr, ok := err.(cliutil.StatusError); ok {
-			cli.Grumble("cdebug: %s\n", sterr)
+			cli.PrintErr("cdebug: %s\n", sterr)
 			os.Exit(sterr.Code())
 		}
 
 		// Hopefully, only usage errors.
-		logrus.WithError(err).Debug("Exit error")
+		logrus.Debug("Exit error: %s", err)
 		os.Exit(1)
 	}
 }
@@ -71,7 +71,7 @@ func main() {
 func setLogLevel(cli cliutil.CLI, logLevel string) {
 	lvl, err := logrus.ParseLevel(logLevel)
 	if err != nil {
-		cli.Grumble("Unable to parse log level: %s\n", logLevel)
+		cli.PrintErr("Unable to parse log level: %s\n", logLevel)
 		os.Exit(1)
 	}
 	logrus.SetLevel(lvl)
