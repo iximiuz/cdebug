@@ -18,7 +18,8 @@ import (
 	"github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 
-	"github.com/iximiuz/cdebug/pkg/cmd"
+	"github.com/iximiuz/cdebug/pkg/cliutil"
+	"github.com/iximiuz/cdebug/pkg/jsonutil"
 	"github.com/iximiuz/cdebug/pkg/util"
 )
 
@@ -43,14 +44,19 @@ import (
 
 const (
 	helperImage = "nixery.dev/shell/socat:latest"
+
+	outFormatText = "text"
+	outFormatJSON = "json"
 )
 
 type options struct {
 	target      string
 	forwardings []string
+	output      string
+	quiet       bool
 }
 
-func NewCommand(cli cmd.CLI) *cobra.Command {
+func NewCommand(cli cliutil.CLI) *cobra.Command {
 	var opts options
 
 	cmd := &cobra.Command{
@@ -58,16 +64,37 @@ func NewCommand(cli cmd.CLI) *cobra.Command {
 		Short: `"Publish" one or more ports of an already running container`,
 		Args:  cobra.MinimumNArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			cli.SetQuiet(opts.quiet)
+
 			opts.target = args[0]
 			opts.forwardings = args[1:]
-			return runPortForward(context.Background(), cli, &opts)
+			return cliutil.WrapStatusError(runPortForward(context.Background(), cli, &opts))
 		},
 	}
+
+	flags := cmd.Flags()
+	flags.SetInterspersed(false) // Instead of relying on --
+
+	flags.BoolVarP(
+		&opts.quiet,
+		"quiet",
+		"q",
+		false,
+		`Suppress verbose output`,
+	)
+
+	flags.StringVarP(
+		&opts.output,
+		"output",
+		"o",
+		outFormatText,
+		`Output format (plain text or JSON)`,
+	)
 
 	return cmd
 }
 
-func runPortForward(ctx context.Context, cli cmd.CLI, opts *options) error {
+func runPortForward(ctx context.Context, cli cliutil.CLI, opts *options) error {
 	client, err := dockerclient.NewClientWithOpts(
 		dockerclient.FromEnv,
 		dockerclient.WithAPIVersionNegotiation(),
@@ -94,18 +121,6 @@ func runPortForward(ctx context.Context, cli cmd.CLI, opts *options) error {
 	if err != nil {
 		return err
 	}
-
-	fmt.Println("forwardings")
-	util.PrettyPrint(forwardings)
-
-	fmt.Println("forwardings.toDockerPortSpecs()")
-	util.PrettyPrint(forwardings.toDockerPortSpecs())
-
-	fmt.Println("exposedPorts")
-	util.PrettyPrint(exposedPorts)
-
-	fmt.Println("portBindings")
-	util.PrettyPrint(portBindings)
 
 	// TODO: Iterate over all forwardings.
 	resp, err := client.ContainerCreate(
@@ -139,11 +154,26 @@ func runPortForward(ctx context.Context, cli cmd.CLI, opts *options) error {
 	if err != nil {
 		return fmt.Errorf("cannot inspect forwarder container: %w", err)
 	}
+
 	// TODO: Multi-network support.
 	targetIP := target.NetworkSettings.Networks["bridge"].IPAddress
-	for from, frontends := range forwarder.NetworkSettings.Ports {
-		for _, frontend := range frontends {
-			fmt.Printf("Forwarding %s to %s's %s:%s\n", net.JoinHostPort(frontend.HostIP, frontend.HostPort), target.Name[1:], targetIP, from)
+	for remotePort, localBindings := range forwarder.NetworkSettings.Ports {
+		for _, binding := range localBindings {
+			switch opts.output {
+			case outFormatText:
+				local := net.JoinHostPort(binding.HostIP, binding.HostPort)
+				remote := targetIP + ":" + string(remotePort)
+				cli.Say("Forwarding %s to %s's %s\n", local, target.Name[1:], remote)
+			case outFormatJSON:
+				cli.Say(jsonutil.Dump(map[string]string{
+					"localHost":  binding.HostIP,
+					"localPort":  binding.HostPort,
+					"remoteHost": targetIP,
+					"remotePort": string(remotePort),
+				}))
+			default:
+				panic("unreachable!")
+			}
 		}
 	}
 
@@ -153,9 +183,10 @@ func runPortForward(ctx context.Context, cli cmd.CLI, opts *options) error {
 
 	go func() {
 		for _ = range sigCh {
-			fmt.Println("Exiting...")
+			cli.Wisper("Exiting...")
+
 			if err := client.ContainerKill(ctx, resp.ID, "KILL"); err != nil {
-				logrus.WithError(err).Warn("Cannot kill forwarder container")
+				logrus.Debugf("Cannot kill forwarder container: %s", err)
 			}
 			break
 		}
@@ -176,7 +207,7 @@ func runPortForward(ctx context.Context, cli cmd.CLI, opts *options) error {
 
 func pullImage(
 	ctx context.Context,
-	cli cmd.CLI,
+	cli cliutil.CLI,
 	client *dockerclient.Client,
 	image string,
 ) error {

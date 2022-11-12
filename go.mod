@@ -11,6 +11,8 @@ require (
 	github.com/moby/term v0.0.0-20220808134915-39b0c02b01ae
 	github.com/sirupsen/logrus v1.9.0
 	github.com/spf13/cobra v1.6.0
+	gotest.tools v2.2.0+incompatible
+	gotest.tools/v3 v3.4.0
 )
 
 require (
@@ -31,5 +33,4 @@ require (
 	golang.org/x/sys v0.0.0-20220722155257-8c9f86f7a55f // indirect
 	golang.org/x/time v0.1.0 // indirect
 	golang.org/x/tools v0.1.12 // indirect
-	gotest.tools/v3 v3.4.0 // indirect
 )

@@ -3,6 +3,7 @@ package exec
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -15,7 +16,7 @@ import (
 	"github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 
-	"github.com/iximiuz/cdebug/pkg/cmd"
+	"github.com/iximiuz/cdebug/pkg/cliutil"
 	"github.com/iximiuz/cdebug/pkg/tty"
 	"github.com/iximiuz/cdebug/pkg/util"
 )
@@ -33,9 +34,10 @@ type options struct {
 	cmd        []string
 	privileged bool
 	autoRemove bool
+	quiet      bool
 }
 
-func NewCommand(cli cmd.CLI) *cobra.Command {
+func NewCommand(cli cliutil.CLI) *cobra.Command {
 	var opts options
 
 	cmd := &cobra.Command{
@@ -43,54 +45,64 @@ func NewCommand(cli cmd.CLI) *cobra.Command {
 		Short: "Start a debugger shell in the target container",
 		Args:  cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			cli.SetQuiet(opts.quiet)
+
 			opts.target = args[0]
 			if len(args) > 1 {
 				opts.cmd = args[1:]
 			}
-			return runDebugger(context.Background(), cli, &opts)
+			return cliutil.WrapStatusError(runDebugger(context.Background(), cli, &opts))
 		},
 	}
 
 	flags := cmd.Flags()
 	flags.SetInterspersed(false) // Instead of relying on --
 
+	flags.BoolVarP(
+		&opts.quiet,
+		"quiet",
+		"q",
+		false,
+		`Suppress verbose output`,
+	)
+
 	flags.StringVar(
 		&opts.name,
 		"name",
 		"",
-		"Assign a name to the debugger container",
+		`Assign a name to the debugger container`,
 	)
 	flags.StringVar(
 		&opts.image,
 		"image",
 		defaultToolkitImage,
-		"Debugging toolkit image (hint: use 'busybox' or 'nixery.dev/shell/tool1/tool2/etc...')",
+		`Debugging toolkit image (hint: use "busybox" or "nixery.dev/shell/tool1/tool2/etc...")`,
 	)
 	flags.BoolVarP(
 		&opts.stdin,
 		"interactive",
 		"i",
 		false,
-		"Keep the STDIN open (as in `docker exec -i`)",
+		`Keep the STDIN open (as in "docker exec -i")`,
 	)
 	flags.BoolVarP(
 		&opts.tty,
 		"tty",
 		"t",
 		false,
-		"Allocate a pseudo-TTY (as in `docker exec -t`)",
+		`Allocate a pseudo-TTY (as in "docker exec -t")`,
 	)
 	flags.BoolVar(
 		&opts.privileged,
 		"privileged",
 		false,
-		"God mode for the debugger container (as in `docker run --privileged`)",
+		`God mode for the debugger container (as in "docker run --privileged")`,
 	)
 	flags.BoolVar(
 		&opts.autoRemove,
 		"rm",
 		false,
-		"Automatically remove the debugger container when it exits (as in `docker run --rm`)",
+		`Automatically remove the debugger container when it exits (as in "docker run --rm")`,
 	)
 
 	return cmd
@@ -118,7 +130,7 @@ exec sh /.cdebug-entrypoint.sh
 `))
 )
 
-func runDebugger(ctx context.Context, cli cmd.CLI, opts *options) error {
+func runDebugger(ctx context.Context, cli cliutil.CLI, opts *options) error {
 	if err := cli.InputStream().CheckTty(opts.stdin, opts.tty); err != nil {
 		return err
 	}
@@ -128,16 +140,16 @@ func runDebugger(ctx context.Context, cli cmd.CLI, opts *options) error {
 		dockerclient.WithAPIVersionNegotiation(),
 	)
 	if err != nil {
-		return fmt.Errorf("cannot initialize Docker client: %w", err)
+		return err
 	}
 
 	target, err := client.ContainerInspect(ctx, opts.target)
 	if err != nil {
-		return fmt.Errorf("cannot inspect target container: %w", err)
+		return err
 	}
 
 	if target.State == nil || !target.State.Running {
-		return fmt.Errorf("target container found but it's not running")
+		return errors.New("target container found but it's not running")
 	}
 
 	if err := pullImage(ctx, cli, client, opts.image); err != nil {
@@ -223,7 +235,7 @@ func runDebugger(ctx context.Context, cli cmd.CLI, opts *options) error {
 
 func pullImage(
 	ctx context.Context,
-	cli cmd.CLI,
+	cli cliutil.CLI,
 	client *dockerclient.Client,
 	image string,
 ) error {
@@ -239,7 +251,7 @@ func pullImage(
 
 func attachDebugger(
 	ctx context.Context,
-	cli cmd.CLI,
+	cli cliutil.CLI,
 	client *dockerclient.Client,
 	opts *options,
 	contID string,
@@ -285,7 +297,7 @@ func attachDebugger(
 }
 
 type ioStreamer struct {
-	streams cmd.Streams
+	streams cliutil.Streams
 
 	inputStream  io.ReadCloser
 	outputStream io.Writer

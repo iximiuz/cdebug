@@ -1,4 +1,6 @@
-# cdebug - experimental container debugger (WIP)
+# cdebug - a swiss army knife of container debugging (WIP)
+
+TODO: Add table command (exec, port-forward, export, explore) x runtime (docker, containerd, k8s, etc).
 
 A handy way to troubleshoot containers lacking a shell and/or debugging tools
 (e.g, scratch, slim, or distroless):
