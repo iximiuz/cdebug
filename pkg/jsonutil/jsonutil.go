@@ -13,6 +13,9 @@ func Dump(v any) string {
 }
 
 func DumpIndent(v any) string {
-	b, _ := json.MarshalIndent(v, "", "  ")
+	b, err := json.MarshalIndent(v, "", "  ")
+	if err != nil {
+		panic(err)
+	}
 	return string(b)
 }

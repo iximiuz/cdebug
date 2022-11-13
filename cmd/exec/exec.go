@@ -149,6 +149,7 @@ func runDebugger(ctx context.Context, cli cliutil.CLI, opts *options) error {
 		return errors.New("target container found but it's not running")
 	}
 
+	cli.PrintAux("Pulling debugger image...\n")
 	if err := client.ImagePullEx(ctx, opts.image, types.ImagePullOptions{}); err != nil {
 		return fmt.Errorf("cannot pull debugger image %q: %w", opts.image, err)
 	}
