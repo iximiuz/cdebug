@@ -48,7 +48,7 @@ func TestPortForwardDockerRemotePort(t *testing.T) {
 			return poll.Continue("waiting for `cdebug port-forward` to start up...")
 		},
 		poll.WithDelay(500*time.Millisecond),
-		poll.WithTimeout(3*time.Second),
+		poll.WithTimeout(30*time.Second),
 	)
 
 	// Probe target through forwarded port.
