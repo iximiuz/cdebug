@@ -1,39 +1,21 @@
 # cdebug - a swiss army knife of container debugging (WIP)
 
-TODO: Add table command (exec, port-forward, export, explore) x runtime (docker, containerd, k8s, etc).
+With this tool you can:
 
-A handy way to troubleshoot containers lacking a shell and/or debugging tools
-(e.g, scratch, slim, or distroless):
+- Troubleshoot containers lacking shell and/or debugging tools
+- Forward unpublished or even localhost ports to your host system
+- Expose endpoints from the host system to containers & Kubernetes networks
+- Handily export image's and/or container's filesystem to local folders
+- and more :)
 
-```sh
-# Simple (busybox)
-$ cdebug exec -it <target-container>
+The following _commands_ x _runtimes_ are supported:
 
-# Advanced (shell + ps + vim)
-$ cdebug exec -it --image nixery.dev/shell/ps/vim <target-container>
-```
-
-The `cdebug exec` command is some sort of crossbreeding of `docker exec` and `kubectl debug` commands.
-You point the tool at a running container, say what toolkit image to use, and it starts
-a debugging "sidecar" container that _feels_ like a `docker exec` session into the target container:
-
-- The root filesystem of the debugger **_is_** the root filesystem of the target container.
-- The target container isn't recreated and/or restarted.
-- No extra volumes or copying of debugging tools is needed.
-- The debugging tools **_are_** available in the target container.
-
-Currently supported toolkit images:
-
-- 🧰 `busybox` - a good default choice
-- 🧙 `nixery.dev/shell/...` - [a very powerful way to assemble images on the fly](https://nixery.dev/).
-
-Supported runtimes:
-
-- Docker (via the socket file)
-- containerd (via the socket file) - coming soon
-- Kubernetes CRI (via the CRI gRPC API) - coming later
-- Kubernetes (via the API server) - coming later
-- runc or alike (via directly invoking the CLI) - coming later.
+|                       | Docker | Containerd | Kubernetes | Kubernetes CRI | runc  |
+| :---                  | :---:  | :---:      | :---:      | :---:          | :---: |
+| `exec`                | ✅     | 🛠️         | -          | -              | -     |
+| `port-forward` local  | ✅     | -          | -          | -              | -     |
+| `port-forward` remote | 🛠️     | -          | 🛠️         | -              | -     |
+| `export`              | -      | -          | -          | -              | -     |
 
 ## Installation
 
@@ -48,18 +30,111 @@ curl -Ls https://github.com/iximiuz/cdebug/releases/latest/download/cdebug_${GOO
 sudo mv cdebug /usr/local/bin
 ```
 
-At the moment, the following targets are (kinda sorta) supported:
+At the moment, the following systems are (kinda sorta) supported:
 
 - linux/amd64
 - darwin/amd64
 - darwin/arm64
 
-## Demo 1: An interactive shell with busybox
+## Commands
+
+### cdebug exec
+
+Run an interactive shell in a scratch, slim, or distroless container, with ease:
+
+```sh
+cdebug exec -it <target-container>
+```
+
+The `cdebug exec` command is a crossbreeding of `docker exec` and `kubectl debug` commands.
+You point the tool at a running container, say what toolkit image to use, and it starts
+a debugging "sidecar" container that _feels_ like a `docker exec` session to the target container:
+
+- The root filesystem of the debugger **_is_** the root filesystem of the target container.
+- The target container isn't recreated and/or restarted.
+- No extra volumes or copying of debugging tools is needed.
+- The debugging tools **_are_** available in the target container.
+
+By default, the `busybox:latest` image is used for the debugger sidecar, but you can override it
+with the `--image` flag. Combining this with the superpower of Nix and [Nixery](https://nixery.dev/),
+you can get all your favorite tools by simply listing them in the image name:
+
+```
+cdebug exec -it --image nixery.dev/shell/ps/vim/tshark <target-container>
+```
+
+<details>
+<summary>How it works</summary>
+
+The technique is based on the ideas from this [blog post](https://iximiuz.com/en/posts/docker-debug-slim-containers).
+Oversimplifying, the debugger container is started like:
+
+```sh
+docker run [-it] \
+  --network container:<target> \
+  --pid container:<target> \
+  --uts container:<target> \
+  <toolkit-image>
+  sh -c <<EOF
+ln -s /proc/$$/root/bin/ /proc/1/root/.cdebug
+
+export PATH=$PATH:/.cdebug
+chroot /proc/1/root sh
+EOF
+```
+
+The secret sauce is the symlink + PATH modification + chroot-ing.
+
+</details>
+
+### cdebug port-forward
+
+Forward local ports to containers and vice versa. This command is another crossbreeding -
+this time it's `kubectl port-forward` and `ssh -L|-R`.
+
+Currently, only local port forwarding (`cdebug port-forward -L`) is supported,
+but remote port forwarding is under active development.
+
+Local port forwarding use cases (works for Docker Desktop too!):
+
+- Publish "unpublished" port 80 to a random port on the host: `cdebug port-forward <target> -L 80`
+- Expose container's localhost to the host system: `cdebug port-forward <target> -L 127.0.0.1:5432`
+- Proxy local traffic to a remote host via the target: `cdebug port-forward <target> -L <LOCAL_HOST>:<LOCAL_PORT>:<REMOTE_HOST>:<REMOTE_PORT>`
+- 🛠️ Expose a Kubernetes service to the host system: `cdebug port-forward <target> -L 8888:my.svc.cluster.local:443`
+
+Remote port forwarding use cases:
+
+- Start a container/Pod forwarding traffic destined to its `<IP>:<port>` to a non-cluster endpoint reachable from the host system.
+- ...
+
+<details>
+<summary>How it works</summary>
+
+**Local port forwarding** is implemented by starting an extra forwarder container in the
+target's network and publishing its ports to the host using the standard means (e.g.,
+`docker run --publish`). The forwarder container itself runs something like:
+
+`socat TCP-LISTEN:<REMOTE_PORT>,fork TCP-CONNECT:<REMOTE_HOST>:<REMOTE_PORT>`
+
+If the _REMOTE_HOST_ doesn't belong to the target or it's the target's localhost,
+an extra sidecar container is started in the target's network namespace with another
+socat forwarding traffic from the target public interface to `REMOTE_HOST:REMOTE_PORT`.
+
+**Remote port forwarding** will use similar tricks but combined with more advanced
+reverse tunneling.
+
+</details>
+
+## Demos
+
+Below are a few popular scenarios formatted as reproducible demos.
+
+### A simple interactive shell to a distroless container
 
 First, a target container is needed. Let's use a distroless nodejs image for that:
 
 ```sh
-docker run -d --rm \
+$ docker run -d --rm \
   --name my-distroless gcr.io/distroless/nodejs \
   -e 'setTimeout(() => console.log("Done"), 99999999)'
 ```
@@ -67,7 +142,7 @@ docker run -d --rm \
 Now, let's start an interactive shell (using busybox) into the above container:
 
 ```sh
-cdebug exec -it my-distroless
+$ cdebug exec -it my-distroless
 ```
 
 Exploring the filesystem shows that it's a rootfs of the nodejs container:
@@ -100,7 +175,7 @@ Notice 👉  above - that's where the debugging tools live:
 The process tree of the debugger container is the process tree of the target:
 
 ```sh
-/ # ps auxf
+/ $# ps auxf
 PID   USER     TIME  COMMAND
     1 root      0:00 /nodejs/bin/node -e setTimeout(() => console.log("Done"),
    13 root      0:00 sh -c  set -euo pipefail  sleep 999999999 & SANDBOX_PID=$!
@@ -111,43 +186,62 @@ PID   USER     TIME  COMMAND
    45 root      0:00 ps auxf
 ```
 
-## Demo 2: An interactive shell with code editor
+### An interactive shell with code editor (vim)
 
 If the tools provided by busybox aren't enough, you can bring your own tools with
 a ~~little~~ huge help of the [nixery](https://nixery.dev/) project:
 
 ```sh
-cdebug exec -it --image nixery.dev/shell/vim my-distroless
+$ cdebug exec -it --image nixery.dev/shell/vim my-distroless
 ```
 
-## Demo 3: An interactive shell with tshark and other advanced tools
+### An interactive shell with tshark and other advanced tools
 
 Even more powerful exammple:
 
 ```sh
-cdebug exec -it --image nixery.dev/shell/ps/findutils/tshark my-distroless
+$ cdebug exec -it --image nixery.dev/shell/ps/findutils/tshark my-distroless
 ```
 
-## How it works
+### Publish "forgotten" port
 
-The technique is based on the ideas from this [blog post](https://iximiuz.com/en/posts/docker-debug-slim-containers).
-Oversimplifying, the debugger container is started like:
+Start an nginx container but don't expose its port 80:
 
 ```sh
-docker run [-it] \
-  --network container:<target> \
-  --pid container:<target> \
-  --uts container:<target> \
-  <toolkit-image>
-  sh -c <<EOF
-ln -s /proc/$$/root/bin/ /proc/1/root/.cdebug
-
-export PATH=$PATH:/.cdebug
-chroot /proc/1/root sh
-EOF
+$ docker run -d --name nginx-1 nginx:1.23
 ```
 
-The secret sauce is the symlink + PATH modification + chroot-ing.
+Forward local port 8080 to the nginx's 80:
+
+```sh
+$ cdebug port-forward nginx-1 -L 8080:80
+$ curl localhost:8080
+```
+
+### Expose localhost's ports
+
+Start a containerized service that listens only on its localhost:
+
+```sh
+$ docker run -d --name svc-1 python:3-alpine python3 -m 'http.server' -b 127.0.0.1 8888
+```
+
+Tap into the above service:
+
+```sh
+$ cdebug port-forward svc-1 -L 127.0.0.1:8888
+Pulling forwarder image...
+latest: Pulling from shell/socat
+Digest: sha256:b43b6cf8d22615616b13c744b8ff525f5f6c0ca6c11b37fa3832a951ebb3c20c
+Status: Image is up to date for nixery.dev/shell/socat:latest
+Forwarding 127.0.0.1:49176 to 127.0.0.1:8888 through 172.17.0.4:34128
+
+$ curl localhost:49176
+<!DOCTYPE HTML>
+<html lang="en">
+<head>
+...
+```
 
 ## F.A.Q
 
@@ -166,13 +260,10 @@ Chances are your target container has been started with elevated permissions whi
 
 ## TODO:
 
-- Make exec accept (partial) container IDs (only names are supported at the moment)
-- Terminal resizing ([example](https://github.com/docker/cli/blob/110c4d92b883357c9fb3edc344c4fbec5f77896f/cli/command/container/tty.go#L71))
 - More `exec` flags (like in `docker run`): `--cap-add`, `--cap-drop`, `--env`, `--volume`, etc.
 - Helper command(s) suggesting nix(ery) packages
-- E2E Tests
-- Cross-platform builds + goreleaser
 - Non-docker runtimes (containerd, runc, k8s)
+- E2E Tests
 
 ## Contributions
 
