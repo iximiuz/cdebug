@@ -5,26 +5,52 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"strings"
 	"text/template"
 
-	"github.com/docker/docker/api/types"
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/pkg/stdcopy"
-	"github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 
 	"github.com/iximiuz/cdebug/pkg/cliutil"
-	"github.com/iximiuz/cdebug/pkg/docker"
-	"github.com/iximiuz/cdebug/pkg/tty"
-	"github.com/iximiuz/cdebug/pkg/uuid"
 )
 
 const (
 	defaultToolkitImage = "docker.io/library/busybox:latest"
 )
+
+var (
+	chrootEntrypoint = template.Must(template.New("chroot-entrypoint").Parse(`
+set -euo pipefail
+
+{{ if .IsNix }}
+rm -rf /proc/1/root/nix
+ln -s /proc/$$/root/nix /proc/1/root/nix
+{{ end }}
+
+ln -s /proc/$$/root/bin/ /proc/1/root/.cdebug-{{ .ID }}
+
+cat > /.cdebug-entrypoint.sh <<EOF
+#!/bin/sh
+export PATH=$PATH:/.cdebug-{{ .ID }}
+
+chroot /proc/1/root {{ .Cmd }}
+EOF
+
+exec sh /.cdebug-entrypoint.sh
+`))
+
+	errTargetNotFound = errors.New("target container not found")
+
+	errTargetNotRunning = errors.New("target container found but it's not running: executing commands in stopped containers is not supported yet")
+)
+
+func errCannotPull(image string, cause error) error {
+	return fmt.Errorf("cannot pull debugger image %q: %w", image, cause)
+}
+
+func errCannotCreate(cause error) error {
+	return fmt.Errorf("cannot create debugger container: %w", cause)
+}
 
 type options struct {
 	target     string
@@ -36,6 +62,9 @@ type options struct {
 	privileged bool
 	autoRemove bool
 	quiet      bool
+
+	runtime   string
+	namespace string
 }
 
 func NewCommand(cli cliutil.CLI) *cobra.Command {
@@ -48,11 +77,27 @@ func NewCommand(cli cliutil.CLI) *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cli.SetQuiet(opts.quiet)
 
+			if err := cli.InputStream().CheckTty(opts.stdin, opts.tty); err != nil {
+				return cliutil.WrapStatusError(err)
+			}
+
 			opts.target = args[0]
 			if len(args) > 1 {
 				opts.cmd = args[1:]
 			}
-			return cliutil.WrapStatusError(runDebugger(context.Background(), cli, &opts))
+
+			ctx := context.Background()
+			if strings.HasPrefix(opts.target, "containerd://") {
+				opts.target = strings.TrimPrefix(opts.target, "containerd://")
+				return cliutil.WrapStatusError(runDebuggerContainerd(ctx, cli, &opts))
+			}
+
+			if strings.HasPrefix(opts.target, "k8s://") || strings.HasPrefix(opts.target, "kubernetes://") {
+				return errors.New("coming soon...")
+			}
+
+			// Default
+			return cliutil.WrapStatusError(runDebuggerDocker(ctx, cli, &opts))
 		},
 	}
 
@@ -66,7 +111,6 @@ func NewCommand(cli cliutil.CLI) *cobra.Command {
 		false,
 		`Suppress verbose output`,
 	)
-
 	flags.StringVar(
 		&opts.name,
 		"name",
@@ -105,238 +149,21 @@ func NewCommand(cli cliutil.CLI) *cobra.Command {
 		false,
 		`Automatically remove the debugger container when it exits (as in "docker run --rm")`,
 	)
+	flags.StringVarP(
+		&opts.namespace,
+		"namespace",
+		"n",
+		"",
+		`Namespace (the final meaning of this parameter is runtime specific)`,
+	)
+	flags.StringVar(
+		&opts.runtime,
+		"runtime",
+		"",
+		`Runtime address ("/var/run/docker.sock" | "/run/containerd/containerd.sock" | "https://<kube-api-addr>:8433/...)`,
+	)
 
 	return cmd
-}
-
-var (
-	chrootEntrypoint = template.Must(template.New("chroot-entrypoint").Parse(`
-set -euo pipefail
-
-{{ if .IsNix }}
-rm -rf /proc/1/root/nix
-ln -s /proc/$$/root/nix /proc/1/root/nix
-{{ end }}
-
-ln -s /proc/$$/root/bin/ /proc/1/root/.cdebug-{{ .ID }}
-
-cat > /.cdebug-entrypoint.sh <<EOF
-#!/bin/sh
-export PATH=$PATH:/.cdebug-{{ .ID }}
-
-chroot /proc/1/root {{ .Cmd }}
-EOF
-
-exec sh /.cdebug-entrypoint.sh
-`))
-)
-
-func runDebugger(ctx context.Context, cli cliutil.CLI, opts *options) error {
-	if err := cli.InputStream().CheckTty(opts.stdin, opts.tty); err != nil {
-		return err
-	}
-
-	client, err := docker.NewClient(cli.AuxStream())
-	if err != nil {
-		return err
-	}
-
-	target, err := client.ContainerInspect(ctx, opts.target)
-	if err != nil {
-		return err
-	}
-	if target.State == nil || !target.State.Running {
-		return errors.New("target container found but it's not running")
-	}
-
-	cli.PrintAux("Pulling debugger image...\n")
-	if err := client.ImagePullEx(ctx, opts.image, types.ImagePullOptions{}); err != nil {
-		return fmt.Errorf("cannot pull debugger image %q: %w", opts.image, err)
-	}
-
-	runID := uuid.ShortID()
-	nsMode := "container:" + target.ID
-	resp, err := client.ContainerCreate(
-		ctx,
-		&container.Config{
-			Image:      opts.image,
-			Entrypoint: []string{"sh"},
-			Cmd: []string{
-				"-c",
-				mustRenderTemplate(
-					cli,
-					chrootEntrypoint,
-					map[string]any{
-						"ID":    runID,
-						"IsNix": strings.Contains(opts.image, "nixery"),
-						"Cmd": func() string {
-							if len(opts.cmd) == 0 {
-								return "sh"
-							}
-							return "sh -c '" + strings.Join(shellescape(opts.cmd), " ") + "'"
-						}(),
-					},
-				),
-			},
-			Tty:          opts.tty,
-			OpenStdin:    opts.stdin,
-			AttachStdin:  opts.stdin,
-			AttachStdout: true,
-			AttachStderr: true,
-		},
-		&container.HostConfig{
-			Privileged: target.HostConfig.Privileged || opts.privileged,
-			CapAdd:     target.HostConfig.CapAdd,
-			CapDrop:    target.HostConfig.CapDrop,
-
-			AutoRemove: opts.autoRemove,
-
-			NetworkMode: container.NetworkMode(nsMode),
-			PidMode:     container.PidMode(nsMode),
-			UTSMode:     container.UTSMode(nsMode),
-			// TODO: CgroupnsMode: container.CgroupnsMode(nsMode),
-			// TODO: IpcMode:      container.IpcMode(nsMode)
-			// TODO: UsernsMode:   container.UsernsMode(target)
-		},
-		nil,
-		nil,
-		debuggerName(opts.name, runID),
-	)
-	if err != nil {
-		return fmt.Errorf("cannot create debugger container: %w", err)
-	}
-
-	close, err := attachDebugger(ctx, cli, client, opts, resp.ID)
-	if err != nil {
-		return fmt.Errorf("cannot attach to debugger container: %w", err)
-	}
-	defer close()
-
-	if err := client.ContainerStart(ctx, resp.ID, types.ContainerStartOptions{}); err != nil {
-		return fmt.Errorf("cannot start debugger container: %w", err)
-	}
-
-	if opts.tty && cli.OutputStream().IsTerminal() {
-		tty.StartResizing(ctx, cli.OutputStream(), client, resp.ID)
-	}
-
-	statusCh, errCh := client.ContainerWait(ctx, resp.ID, container.WaitConditionNotRunning)
-	select {
-	case err := <-errCh:
-		if err != nil {
-			return fmt.Errorf("waiting debugger container failed: %w", err)
-		}
-	case <-statusCh:
-	}
-
-	return nil
-}
-
-func attachDebugger(
-	ctx context.Context,
-	cli cliutil.CLI,
-	client *docker.Client,
-	opts *options,
-	contID string,
-) (func(), error) {
-	resp, err := client.ContainerAttach(ctx, contID, types.ContainerAttachOptions{
-		Stream: true,
-		Stdin:  opts.stdin,
-		Stdout: true,
-		Stderr: true,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("cannot attach to debugger container: %w", err)
-	}
-
-	var cin io.ReadCloser
-	if opts.stdin {
-		cin = cli.InputStream()
-	}
-
-	var cout io.Writer = cli.OutputStream()
-	var cerr io.Writer = cli.ErrorStream()
-	if opts.tty {
-		cerr = cli.OutputStream()
-	}
-
-	go func() {
-		s := ioStreamer{
-			streams:      cli,
-			inputStream:  cin,
-			outputStream: cout,
-			errorStream:  cerr,
-			resp:         resp,
-			tty:          opts.tty,
-			stdin:        opts.stdin,
-		}
-
-		if err := s.stream(ctx); err != nil {
-			logrus.Debugf("ioStreamer.stream() failed: %s", err)
-		}
-	}()
-
-	return resp.Close, nil
-}
-
-type ioStreamer struct {
-	streams cliutil.Streams
-
-	inputStream  io.ReadCloser
-	outputStream io.Writer
-	errorStream  io.Writer
-
-	resp types.HijackedResponse
-
-	stdin bool
-	tty   bool
-}
-
-func (s *ioStreamer) stream(ctx context.Context) error {
-	if s.tty {
-		s.streams.InputStream().SetRawTerminal()
-		s.streams.OutputStream().SetRawTerminal()
-		defer func() {
-			s.streams.InputStream().RestoreTerminal()
-			s.streams.OutputStream().RestoreTerminal()
-		}()
-	}
-
-	inDone := make(chan error)
-	go func() {
-		if s.stdin {
-			if _, err := io.Copy(s.resp.Conn, s.inputStream); err != nil {
-				logrus.Debugf("Error forwarding stdin: %s", err)
-			}
-		}
-		close(inDone)
-	}()
-
-	outDone := make(chan error)
-	go func() {
-		var err error
-		if s.tty {
-			_, err = io.Copy(s.outputStream, s.resp.Reader)
-		} else {
-			_, err = stdcopy.StdCopy(s.outputStream, s.errorStream, s.resp.Reader)
-		}
-		if err != nil {
-			logrus.Debugf("Error forwarding stdout/stderr: %s", err)
-		}
-		close(outDone)
-	}()
-
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-inDone:
-		<-outDone
-		return nil
-	case <-outDone:
-		return nil
-	}
-
-	return nil
 }
 
 func debuggerName(name string, runID string) string {

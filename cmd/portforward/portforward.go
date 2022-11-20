@@ -68,6 +68,8 @@ type options struct {
 	runningTimeout time.Duration
 	output         string
 	quiet          bool
+
+	runtime string
 }
 
 func NewCommand(cli cliutil.CLI) *cobra.Command {
@@ -106,7 +108,6 @@ refers to the cdebug side. The word "remote" always refers to the target contain
 		nil,
 		`Local port forwarding in the form [[LOCAL_HOST:]LOCAL_PORT:][REMOTE_HOST:]REMOTE_PORT`,
 	)
-
 	flags.StringSliceVarP(
 		&opts.remotes,
 		"remote",
@@ -114,14 +115,12 @@ refers to the cdebug side. The word "remote" always refers to the target contain
 		nil,
 		`Remote port forwarding in the form [REMOTE_HOST:]REMOTE_PORT:LOCAL_HOST:LOCAL_PORT`,
 	)
-
 	flags.DurationVar(
 		&opts.runningTimeout,
 		"running-timeout",
 		10*time.Second,
 		`How long to wait until the target is up and running`,
 	)
-
 	flags.BoolVarP(
 		&opts.quiet,
 		"quiet",
@@ -129,12 +128,21 @@ refers to the cdebug side. The word "remote" always refers to the target contain
 		false,
 		`Suppress verbose output`,
 	)
+	flags.StringVar(
+		&opts.runtime,
+		"runtime",
+		"",
+		`Runtime address ("/var/run/docker.sock" | "/run/containerd/containerd.sock" | "https://<kube-api-addr>:8433/...)`,
+	)
 
 	return cmd
 }
 
 func runPortForward(ctx context.Context, cli cliutil.CLI, opts *options) error {
-	client, err := docker.NewClient(cli.AuxStream())
+	client, err := docker.NewClient(docker.Options{
+		Out:  cli.AuxStream(),
+		Host: opts.runtime,
+	})
 	if err != nil {
 		return err
 	}
