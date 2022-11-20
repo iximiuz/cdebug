@@ -1,8 +1,12 @@
 package main
 
 import (
+	cryptorand "crypto/rand"
+	"encoding/binary"
 	"fmt"
+	mathrand "math/rand"
 	"os"
+	"time"
 
 	"github.com/moby/term"
 	"github.com/sirupsen/logrus"
@@ -18,6 +22,15 @@ var (
 	commit  = "none"
 	date    = "unknown"
 )
+
+func init() {
+	var buf [8]byte
+	if _, err := cryptorand.Read(buf[:]); err == nil {
+		mathrand.Seed(int64(binary.LittleEndian.Uint64(buf[:])))
+	} else {
+		mathrand.Seed(time.Now().UnixNano())
+	}
+}
 
 func main() {
 	stdin, stdout, stderr := term.StdStreams()

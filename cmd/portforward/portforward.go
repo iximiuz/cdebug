@@ -4,10 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
-	"os/signal"
+	"math/rand"
 	"strings"
-	"syscall"
+	"sync"
+	"time"
 
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
@@ -18,7 +18,7 @@ import (
 
 	"github.com/iximiuz/cdebug/pkg/cliutil"
 	"github.com/iximiuz/cdebug/pkg/docker"
-	"github.com/iximiuz/cdebug/pkg/jsonutil"
+	"github.com/iximiuz/cdebug/pkg/signalutil"
 	"github.com/iximiuz/cdebug/pkg/uuid"
 )
 
@@ -30,16 +30,17 @@ import (
 //   - Remote port forwarding: implement me!
 //
 // Local port forwarding's possible modes (kinda sorta as in ssh -L):
-//   - REMOTE_PORT                                # binds REMOTE_IP:REMOTE_PORT to a random port on localhost
-//   - REMOTE_<IP|ALIAS|NET>:REMOTE_PORT          # The second form is needed to:
-//                                                #  1) allow exposing target's localhost ports
-//                                                #  2) specify a concrete IP for a multi-network target
+//   - REMOTE_PORT                                # binds TARGET_IP:REMOTE_PORT to a random port on localhost
+//   - REMOTE_<IP|ALIAS|NET>:REMOTE_PORT          # binds arbitrary REMOTE_ID:REMOTE_PORT to a random port on localhost
+//                                                #  1) allows exposing target's localhost ports
+//                                                #  2) allows specifyng a concrete IP for a multi-network target
+//                                                #  3) allows specifyng an arbitrary destination reachable from the target
 //
-//   - LOCAL_PORT:REMOTE_PORT                     # binds REMOTE_IP:REMOTE_PORT to LOCAL_PORT on localhost
+//   - LOCAL_PORT:REMOTE_PORT                     # much like the above form but uses a concrete port on the host system
 //   - LOCAL_PORT:REMOTE_<IP|ALIAS|NET>:REMOTE_PORT
 //
-//   - LOCAL_IP:LOCAL_PORT:REMOTE_PORT            # similar to LOCAL_PORT:REMOTE_PORT but LOCAL_IP is used instead of localhost
-//   - LOCAL_IP:LOCAL_PORT:REMOTE_<IP|ALIAS|NET>:REMOTE_PORT
+//   - LOCAL_HOST:LOCAL_PORT:REMOTE_PORT          # similar to LOCAL_PORT:REMOTE_PORT but LOCAL_HOST is used instead of 127.0.0.1
+//   - LOCAL_HOST:LOCAL_PORT:REMOTE_<IP|ALIAS|NET>:REMOTE_PORT
 //
 // Remote port forwarding's possible modes (kinda sorta as in ssh -R):
 //   - coming soon...
@@ -49,20 +50,24 @@ const (
 
 	outFormatText = "text"
 	outFormatJSON = "json"
+
+	cleanupTimeout = 3 * time.Second
 )
 
 var (
 	errNoAddr        = errors.New("target container must have at least one IP address")
 	errBadLocalPort  = errors.New("bad local port")
+	errBadRemoteHost = errors.New("bad remote host")
 	errBadRemotePort = errors.New("bad remote port")
 )
 
 type options struct {
-	target  string
-	locals  []string
-	remotes []string
-	output  string
-	quiet   bool
+	target         string
+	locals         []string
+	remotes        []string
+	runningTimeout time.Duration
+	output         string
+	quiet          bool
 }
 
 func NewCommand(cli cliutil.CLI) *cobra.Command {
@@ -99,7 +104,7 @@ refers to the cdebug side. The word "remote" always refers to the target contain
 		"local",
 		"L",
 		nil,
-		`Local port forwarding in the form [[LOCAL_IP:]LOCAL_PORT:][REMOTE_IP|REMOTE_NETWORK|REMOTE_ALIAS:]REMOTE_PORT`,
+		`Local port forwarding in the form [[LOCAL_HOST:]LOCAL_PORT:][REMOTE_HOST:]REMOTE_PORT`,
 	)
 
 	flags.StringSliceVarP(
@@ -107,7 +112,14 @@ refers to the cdebug side. The word "remote" always refers to the target contain
 		"remote",
 		"R",
 		nil,
-		`Remote port forwarding in the form [REMOTE_IP|REMOTE_NETWORK|REMOTE_ALIAS:]REMOTE_PORT:LOCAL_IP:LOCAL_PORT`,
+		`Remote port forwarding in the form [REMOTE_HOST:]REMOTE_PORT:LOCAL_HOST:LOCAL_PORT`,
+	)
+
+	flags.DurationVar(
+		&opts.runningTimeout,
+		"running-timeout",
+		10*time.Second,
+		`How long to wait until the target is up and running`,
 	)
 
 	flags.BoolVarP(
@@ -116,14 +128,6 @@ refers to the cdebug side. The word "remote" always refers to the target contain
 		"q",
 		false,
 		`Suppress verbose output`,
-	)
-
-	flags.StringVarP(
-		&opts.output,
-		"output",
-		"o",
-		outFormatText,
-		`Output format ("text" | "json")`,
 	)
 
 	return cmd
@@ -135,78 +139,121 @@ func runPortForward(ctx context.Context, cli cliutil.CLI, opts *options) error {
 		return err
 	}
 
-	target, err := client.ContainerInspect(ctx, opts.target)
-	if err != nil {
-		return err
-	}
-	if err := validateTarget(target); err != nil {
-		return err
-	}
-
+	// TODO: Pull only if not present locally.
 	cli.PrintAux("Pulling forwarder image...\n")
 	if err := client.ImagePullEx(ctx, forwarderImage, types.ImagePullOptions{}); err != nil {
 		return fmt.Errorf("cannot pull forwarder image %q: %w", forwarderImage, err)
 	}
 
-	locals, err := parseLocalForwardings(target, opts.locals)
-	if err != nil {
-		return err
-	}
+	ctx, cancel := context.WithCancel(signalutil.InterruptibleContext(ctx))
+	defer cancel()
 
-	// TODO: It's probably a good idea to monitor forwarders too.
-	for i, l := range locals {
-		forwarder, err := startLocalForwarder(ctx, client, target, l)
+	for {
+		cont, err := runLocalPortForwarding(ctx, cli, client, opts)
 		if err != nil {
 			return err
 		}
-		defer func() {
-			if err := client.ContainerKill(ctx, forwarder.ID, "KILL"); err != nil {
-				logrus.Debugf("Cannot kill forwarder container: %s", err)
-			}
-		}()
-
-		if len(l.localPort) == 0 {
-			for _, bindings := range forwarder.NetworkSettings.Ports {
-				locals[i].localPort = bindings[0].HostPort
-				break
-			}
+		if !cont || ctx.Err() != nil {
+			cli.PrintAux("Forwarding's done. Exiting...\n")
+			return nil
 		}
+
+		cli.PrintAux("Giving target %s to get up and running again...\n", opts.runningTimeout)
+	}
+}
+
+func runLocalPortForwarding(
+	ctx context.Context,
+	cli cliutil.CLI,
+	client dockerclient.CommonAPIClient,
+	opts *options,
+) (bool, error) {
+	target, err := getRunningTarget(ctx, client, opts.target, opts.runningTimeout)
+	if err != nil {
+		return false, err
 	}
 
-	switch opts.output {
-	case outFormatJSON:
-		cli.PrintOut(localForwardingsToJSON(locals) + "\n")
-	case outFormatText:
-		cli.PrintOut(localForwardingsToText(locals) + "\n")
-	default:
-		panic("unreachable!")
+	if err := validateTarget(target); err != nil {
+		return false, err
 	}
 
-	signalCh := make(chan os.Signal, 128)
-	signal.Notify(signalCh, os.Interrupt, syscall.SIGTERM)
-	defer close(signalCh)
+	locals, err := parseLocalForwardings(target, opts.locals)
+	if err != nil {
+		return false, err
+	}
 
-	targetStatusCh, targetErrCh := client.ContainerWait(ctx, target.ID, container.WaitConditionNotRunning)
+	// Start a new context bound to a single target lifecycle.
+	// It'll be used mostly to terminate the forwarders if a
+	// given instance of the target terminates.
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	fwdersErrorCh := startLocalForwarders(ctx, cli, client, target, locals)
+
+	targetStatusCh, targetErrorCh := client.ContainerWait(
+		ctx,
+		target.ID,
+		container.WaitConditionNotRunning,
+	)
+
 	select {
-	case <-signalCh:
-		cli.PrintAux("Exiting...")
-
-	case err := <-targetErrCh:
-		if err != nil {
-			return fmt.Errorf("waiting for target container failed: %w", err)
-		}
+	case err := <-fwdersErrorCh:
+		// Couldn't start or keep one or more forwarders running.
+		// All forwarders must be down (best effort) at this time.
+		return false, err
 
 	case <-targetStatusCh:
+		// Target exited/restarting.
+		cli.PrintAux("Target exited\n")
+
+	case err := <-targetErrorCh:
+		// No idea what happened to the target, but better restart the forwarders
+		// (or exit while trying because the target is already gone).
+		if ctx.Err() == nil { // Ignoring 'context canceled' errors...
+			logrus.Debugf("Target error: %s", err)
+		}
 	}
 
-	return nil
+	cli.PrintAux("Stopping the forwarders...\n")
+	cancel() // Tell the forwarders it's time to stop.
+	if err := <-fwdersErrorCh; err != nil {
+		logrus.Debugf("Error stopping forwarder(s): %s", err)
+	}
+
+	if opts.runningTimeout == 0 {
+		return false, nil
+	}
+
+	return true, nil
+}
+
+func getRunningTarget(
+	ctx context.Context,
+	client dockerclient.CommonAPIClient,
+	target string,
+	runningTimeout time.Duration,
+) (types.ContainerJSON, error) {
+	ctx, cancel := context.WithTimeout(ctx, runningTimeout)
+	defer cancel()
+
+	for {
+		cont, err := client.ContainerInspect(ctx, target)
+		if err != nil {
+			return cont, err
+		}
+		if cont.State != nil && cont.State.Running {
+			return cont, nil
+		}
+
+		select {
+		case <-ctx.Done():
+			return cont, fmt.Errorf("target is not running after %s", runningTimeout)
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
 }
 
 func validateTarget(target types.ContainerJSON) error {
-	if target.State == nil || !target.State.Running {
-		return errors.New("target container found but it's not running")
-	}
-
 	hasIP := false
 	for _, net := range target.NetworkSettings.Networks {
 		hasIP = hasIP || len(net.IPAddress) > 0
@@ -219,15 +266,23 @@ func validateTarget(target types.ContainerJSON) error {
 }
 
 type forwarding struct {
-	localIP    string
+	localHost  string
 	localPort  string
-	remoteIP   string
+	remoteHost string
 	remotePort string
 }
 
-func (f forwarding) toDockerPortSpec() string {
-	// ip:hostPort:containerPort | ip::containerPort | hostPort:containerPort | containerPort
-	return f.localIP + ":" + f.localPort + ":" + f.remotePort
+type directForwarding struct {
+	forwarding
+	targetNetwork string
+}
+
+type sidecarForwarding struct {
+	forwarding
+	targetID      string // for netns
+	targetNetwork string
+	targetHost    string
+	sidecarPort   string
 }
 
 func parseLocalForwardings(
@@ -256,108 +311,82 @@ func parseLocalForwarding(
 			return forwarding{}, errBadRemotePort
 		}
 
-		remoteIP, err := unambiguousIP(target)
-		if err != nil {
+		if _, err := unambiguousIP(target); err != nil {
 			return forwarding{}, err
 		}
 
-		// localPort will be later assigned by Docker dynamically
 		return forwarding{
-			localIP:    "127.0.0.1",
-			remoteIP:   remoteIP,
 			remotePort: parts[0],
 		}, nil
 	}
 
-	if len(parts) == 2 {
-		// Either LOCAL_PORT:REMOTE_PORT or REMOTE_<IP|ALIAS|NETWORK>:REMOTE_PORT
-
+	if len(parts) == 2 { // Either LOCAL_PORT:REMOTE_PORT or REMOTE_HOST:REMOTE_PORT
 		if _, err := nat.ParsePort(parts[1]); err != nil {
 			return forwarding{}, errBadRemotePort
 		}
 
 		if _, err := nat.ParsePort(parts[0]); err == nil {
 			// Case 2: LOCAL_PORT:REMOTE_PORT
-			remoteIP, err := unambiguousIP(target)
-			if err != nil {
+			if _, err := unambiguousIP(target); err != nil {
 				return forwarding{}, err
 			}
 
 			return forwarding{
-				localIP:    "127.0.0.1",
 				localPort:  parts[0],
-				remoteIP:   remoteIP,
 				remotePort: parts[1],
 			}, nil
 		}
 
-		// Case 3: REMOTE_<IP|ALIAS|NETWORK>:REMOTE_PORT
-		remoteIP, err := lookupTargetIP(target, parts[0])
-		if err != nil {
-			return forwarding{}, err
-		}
-
-		// localPort will be later assigned by Docker dynamically
+		// Case 3: REMOTE_HOST:REMOTE_PORT
 		return forwarding{
-			localIP:    "127.0.0.1",
+			remoteHost: parts[0],
 			remotePort: parts[1],
-			remoteIP:   remoteIP,
 		}, nil
 	}
 
 	if len(parts) == 3 {
-		// Either LOCAL_PORT:REMOTE_<IP|ALIAS|NET>:REMOTE_PORT or LOCAL_IP:LOCAL_PORT:REMOTE_PORT
+		// Either LOCAL_PORT:REMOTE_HOST:REMOTE_PORT or (LOCAL_HOST:LOCAL_PORT:REMOTE_PORT | LOCAL_HOST::REMOTE_PORT)
+		if _, err := nat.ParsePort(parts[2]); err != nil {
+			return forwarding{}, errBadRemotePort
+		}
 
 		if _, err := nat.ParsePort(parts[0]); err == nil {
-			// Case 4: LOCAL_PORT:REMOTE_<IP|ALIAS|NET>:REMOTE_PORT
-			remoteIP, err := lookupTargetIP(target, parts[1])
-			if err != nil {
-				return forwarding{}, err
-			}
-
-			if _, err := nat.ParsePort(parts[2]); err != nil {
-				return forwarding{}, errBadRemotePort
+			// Case 4: LOCAL_PORT:REMOTE_HOST:REMOTE_PORT
+			if len(parts[1]) == 0 {
+				return forwarding{}, errBadRemoteHost
 			}
 
 			return forwarding{
-				localIP:    "127.0.0.1",
 				localPort:  parts[0],
-				remoteIP:   remoteIP,
+				remoteHost: parts[1],
 				remotePort: parts[2],
 			}, nil
 		}
 
-		// Case 5: LOCAL_IP:LOCAL_PORT:REMOTE_PORT
-		remoteIP, err := unambiguousIP(target)
-		if err != nil {
+		// Case 5: LOCAL_HOST:LOCAL_PORT:REMOTE_PORT or LOCAL_HOST::REMOTE_PORT
+		if _, err := unambiguousIP(target); err != nil {
 			return forwarding{}, err
 		}
 
 		return forwarding{
-			localIP:    parts[0],
+			localHost:  parts[0],
 			localPort:  parts[1],
-			remoteIP:   remoteIP,
 			remotePort: parts[2],
 		}, nil
 	}
 
-	// Case 6: LOCAL_IP:LOCAL_PORT:REMOTE_<IP|ALIAS|NET>:REMOTE_PORT
-	if _, err := nat.ParsePort(parts[1]); err != nil {
+	// Case 6: LOCAL_HOST:LOCAL_PORT:REMOTE_HOST:REMOTE_PORT or LOCAL_HOST::REMOTE_HOST:REMOTE_PORT
+	if _, err := nat.ParsePort(parts[1]); err != nil && len(parts[1]) > 0 {
 		return forwarding{}, errBadLocalPort
 	}
 	if _, err := nat.ParsePort(parts[3]); err != nil {
 		return forwarding{}, errBadRemotePort
 	}
 
-	remoteIP, err := lookupTargetIP(target, parts[2])
-	if err != nil {
-		return forwarding{}, err
-	}
-
 	return forwarding{
-		localIP:    parts[0],
+		localHost:  parts[0],
 		localPort:  parts[1],
-		remoteIP:   remoteIP,
+		remoteHost: parts[2],
 		remotePort: parts[3],
 	}, nil
 }
@@ -405,6 +434,15 @@ func lookupTargetIP(target types.ContainerJSON, ipAliasNetwork string) (string, 
 	return "", errors.New("cannot derive remote host")
 }
 
+func lookupPortBindings(target types.ContainerJSON, targetPort string) []nat.PortBinding {
+	for port, bindings := range target.NetworkSettings.Ports {
+		if targetPort == port.Port() {
+			return bindings
+		}
+	}
+	return nil
+}
+
 func targetNetworkByIP(target types.ContainerJSON, ip string) (string, error) {
 	for name, net := range target.NetworkSettings.Networks {
 		if net.IPAddress == ip {
@@ -414,20 +452,179 @@ func targetNetworkByIP(target types.ContainerJSON, ip string) (string, error) {
 	return "", errors.New("cannot deduce target network by IP")
 }
 
-func startLocalForwarder(
+func startLocalForwarders(
 	ctx context.Context,
+	cli cliutil.CLI,
+	client dockerclient.CommonAPIClient,
+	target types.ContainerJSON,
+	locals []forwarding,
+) <-chan error {
+	doneCh := make(chan error, 1)
+
+	go func() {
+		var errored bool
+		var wg sync.WaitGroup
+
+		for _, fwd := range locals {
+			wg.Add(1)
+
+			go func(fwd forwarding) {
+				defer wg.Done()
+
+				if err := runLocalForwarder(ctx, cli, client, target, fwd); err != nil {
+					logrus.Debugf("Forwarding error: %s", err)
+					errored = true
+				}
+			}(fwd)
+		}
+
+		wg.Wait()
+		if errored {
+			doneCh <- errors.New("one or more forwarders failed")
+		}
+		close(doneCh)
+	}()
+
+	return doneCh
+}
+
+func runLocalForwarder(
+	ctx context.Context,
+	cli cliutil.CLI,
 	client dockerclient.CommonAPIClient,
 	target types.ContainerJSON,
 	fwd forwarding,
-) (types.ContainerJSON, error) {
-	exposedPorts, portBindings, err := nat.ParsePortSpecs([]string{fwd.toDockerPortSpec()})
-	if err != nil {
-		return types.ContainerJSON{}, err
+) error {
+	if len(fwd.localHost) == 0 {
+		fwd.localHost = "127.0.0.1"
 	}
 
-	network, err := targetNetworkByIP(target, fwd.remoteIP)
+	if len(fwd.remoteHost) == 0 {
+		remoteIP, err := unambiguousIP(target)
+		if err != nil {
+			return err
+		}
+
+		network, err := targetNetworkByIP(target, remoteIP)
+		if err != nil {
+			return err
+		}
+
+		return runLocalDirectForwarder(
+			ctx,
+			cli,
+			client,
+			directForwarding{
+				targetNetwork: network,
+				forwarding: forwarding{
+					localHost:  fwd.localHost,
+					localPort:  fwd.localPort,
+					remoteHost: remoteIP,
+					remotePort: fwd.remotePort,
+				},
+			},
+		)
+	}
+
+	if remoteIP, err := lookupTargetIP(target, fwd.remoteHost); err == nil {
+		network, err := targetNetworkByIP(target, remoteIP)
+		if err != nil {
+			return err
+		}
+
+		return runLocalDirectForwarder(
+			ctx,
+			cli,
+			client,
+			directForwarding{
+				targetNetwork: network,
+				forwarding: forwarding{
+					localHost:  fwd.localHost,
+					localPort:  fwd.localPort,
+					remoteHost: remoteIP,
+					remotePort: fwd.remotePort,
+				},
+			},
+		)
+	}
+
+	// In a multi-network case, pick a random one.
+	var targetNetwork, targetIP string
+	for name, settings := range target.NetworkSettings.Networks {
+		if len(settings.IPAddress) > 0 {
+			targetNetwork = name
+			targetIP = settings.IPAddress
+			break
+		}
+	}
+	if len(targetNetwork) == 0 || len(targetIP) == 0 {
+		return errors.New("target is not attached to any networks")
+	}
+
+	return runLocalSidecarForwarder(
+		ctx,
+		cli,
+		client,
+		sidecarForwarding{
+			targetID:      target.ID,
+			targetNetwork: targetNetwork,
+			targetHost:    targetIP,
+			forwarding:    fwd, // as is
+		},
+	)
+}
+
+func runLocalDirectForwarder(
+	ctx context.Context,
+	cli cliutil.CLI,
+	client dockerclient.CommonAPIClient,
+	fwd directForwarding,
+) error {
+	// TODO: Try start() N times.
+
+	forwarderID, err := startLocalDirectForwarder(ctx, client, fwd)
+	defer cleanupContainerIfExist(client, forwarderID)
 	if err != nil {
-		return types.ContainerJSON{}, err
+		return fmt.Errorf("starting forwarder failed: %w", err)
+	}
+
+	if err := printLocalDirectForwarding(ctx, cli, client, fwd, forwarderID); err != nil {
+		return err
+	}
+
+	fwderStatusCh, fwderErrCh := client.ContainerWait(
+		ctx,
+		forwarderID,
+		container.WaitConditionNotRunning,
+	)
+
+	// TODO: If a forwarder was alive long enough, but then suddenly exited,
+	//       we may want to restart it w/o decreasing the number of attempts.
+	select {
+	case <-ctx.Done():
+		return nil
+
+	case status := <-fwderStatusCh:
+		return fmt.Errorf(
+			"forwarder %s exited with code %d: %v",
+			forwarderID, status.StatusCode, status.Error,
+		)
+
+	case err := <-fwderErrCh:
+		logrus.Debugf("Forwarder error: %s", err)
+		return fmt.Errorf("forwarder %s hiccuped: %w", forwarderID, err)
+	}
+}
+
+func startLocalDirectForwarder(
+	ctx context.Context,
+	client dockerclient.CommonAPIClient,
+	fwd directForwarding,
+) (string, error) {
+	portMapSpec := fwd.localHost + ":" + fwd.localPort + ":" + fwd.remotePort
+	exposedPorts, portBindings, err := nat.ParsePortSpecs([]string{portMapSpec})
+	if err != nil {
+		return "", err
 	}
 
 	resp, err := client.ContainerCreate(
@@ -436,55 +633,228 @@ func startLocalForwarder(
 			Image:      forwarderImage,
 			Entrypoint: []string{"socat"},
 			Cmd: []string{
-				fmt.Sprintf("TCP-LISTEN:%s,fork", fwd.remotePort),
-				fmt.Sprintf("TCP-CONNECT:%s:%s", fwd.remoteIP, fwd.remotePort),
+				fmt.Sprintf("TCP4-LISTEN:%s,fork", fwd.remotePort),
+				fmt.Sprintf("TCP-CONNECT:%s:%s", fwd.remoteHost, fwd.remotePort),
 			},
+			Env:          []string{"SOCAT_DEFAULT_LISTEN_IP=0.0.0.0"},
 			ExposedPorts: exposedPorts,
 		},
 		&container.HostConfig{
-			AutoRemove:   true,
 			PortBindings: portBindings,
-			NetworkMode:  container.NetworkMode(network),
+			NetworkMode:  container.NetworkMode(fwd.targetNetwork),
 		},
 		nil,
 		nil,
 		"cdebug-fwd-"+uuid.ShortID(),
 	)
 	if err != nil {
-		return types.ContainerJSON{}, fmt.Errorf("cannot create forwarder container: %w", err)
+		return "", fmt.Errorf("cannot create forwarder container: %w", err)
 	}
 
 	if err := client.ContainerStart(ctx, resp.ID, types.ContainerStartOptions{}); err != nil {
-		return types.ContainerJSON{}, fmt.Errorf("cannot start forwarder container: %w", err)
+		return resp.ID, fmt.Errorf("cannot start forwarder container: %w", err)
 	}
 
-	forwarder, err := client.ContainerInspect(ctx, resp.ID)
+	return resp.ID, nil
+}
+
+func runLocalSidecarForwarder(
+	ctx context.Context,
+	cli cliutil.CLI,
+	client dockerclient.CommonAPIClient,
+	fwd sidecarForwarding,
+) error {
+	// TODO: Try starting sidecar and forwarder N times.
+
+	sidecarID, sidecarPort, err := startLocalSidecarForwarder(
+		ctx, client, fwd.targetID, fwd.remoteHost, fwd.remotePort,
+	)
+	defer cleanupContainerIfExist(client, sidecarID)
 	if err != nil {
-		return forwarder, fmt.Errorf("cannot inspect forwarder container: %w", err)
+		return fmt.Errorf("starting forwarder sidecar failed: %w", err)
 	}
-	return forwarder, nil
+
+	fwd.sidecarPort = sidecarPort // randomly chosen
+
+	forwarderID, err := startLocalDirectForwarder(
+		ctx,
+		client,
+		directForwarding{
+			targetNetwork: fwd.targetNetwork,
+			forwarding: forwarding{
+				localHost:  fwd.localHost,
+				localPort:  fwd.localPort,
+				remoteHost: fwd.targetHost,
+				remotePort: fwd.sidecarPort,
+			},
+		},
+	)
+	defer cleanupContainerIfExist(client, forwarderID)
+	if err != nil {
+		return fmt.Errorf("starting forwarder faield: %w", err)
+	}
+
+	if err := printLocalSidecarForwarding(ctx, cli, client, fwd, forwarderID); err != nil {
+		return err
+	}
+
+	sidecarStatusCh, sidecarErrCh := client.ContainerWait(
+		ctx,
+		sidecarID,
+		container.WaitConditionNotRunning,
+	)
+
+	fwderStatusCh, fwderErrCh := client.ContainerWait(
+		ctx,
+		forwarderID,
+		container.WaitConditionNotRunning,
+	)
+
+	// TODO: If a forwarder and/or was alive long enough, we may want to
+	//       restart them w/o decreasing the number of attempts.
+	select {
+	case <-ctx.Done():
+		return nil
+
+	case status := <-sidecarStatusCh:
+		return fmt.Errorf(
+			"forwarder sidecar %s exited with code %d: %v",
+			sidecarID, status.StatusCode, status.Error,
+		)
+
+	case status := <-fwderStatusCh:
+		return fmt.Errorf(
+			"forwarder %s exited with code %d: %v",
+			forwarderID, status.StatusCode, status.Error,
+		)
+
+	case err := <-sidecarErrCh:
+		logrus.Debugf("Forwarder sidecar error: %s", err)
+		return fmt.Errorf("forwarder sidecar %s hiccuped: %w", sidecarID, err)
+
+	case err := <-fwderErrCh:
+		logrus.Debugf("Forwarder error: %s", err)
+		return fmt.Errorf("forwarder %s hiccuped: %w", forwarderID, err)
+	}
 }
 
-func localForwardingsToJSON(fwds []forwarding) string {
-	out := []map[string]string{}
-	for _, f := range fwds {
-		out = append(out, map[string]string{
-			"localHost":  f.localIP,
-			"localPort":  f.localPort,
-			"remoteHost": f.remoteIP,
-			"remotePort": f.remotePort,
-		})
+func startLocalSidecarForwarder(
+	ctx context.Context,
+	client dockerclient.CommonAPIClient,
+	targetID string,
+	remoteHost string,
+	remotePort string,
+) (string, string, error) {
+	// TODO: This random port may conflict with a port already used by the
+	//       target container. Instead, we should use socat TCP-LISTEN:0 and
+	//       detect what port was assigned by the OS with a separate command.
+	randomPort := fmt.Sprintf("%d", 32000+rand.Intn(25000))
+	resp, err := client.ContainerCreate(
+		ctx,
+		&container.Config{
+			Image:      forwarderImage,
+			Entrypoint: []string{"socat"},
+			Cmd: []string{
+				fmt.Sprintf("TCP4-LISTEN:%s,fork", randomPort),
+				fmt.Sprintf("TCP-CONNECT:%s:%s", remoteHost, remotePort),
+			},
+			Env: []string{"SOCAT_DEFAULT_LISTEN_IP=0.0.0.0"},
+		},
+		&container.HostConfig{
+			NetworkMode: container.NetworkMode("container:" + targetID),
+		},
+		nil,
+		nil,
+		"cdebug-fwd-sidecar-"+uuid.ShortID(),
+	)
+	if err != nil {
+		return "", "", fmt.Errorf("cannot create forwarder sidecar container: %w", err)
 	}
-	return jsonutil.DumpIndent(out)
+
+	if err := client.ContainerStart(ctx, resp.ID, types.ContainerStartOptions{}); err != nil {
+		return resp.ID, "", fmt.Errorf("cannot start forwarder sidecar container: %w", err)
+	}
+
+	return resp.ID, randomPort, nil
 }
 
-func localForwardingsToText(fwds []forwarding) string {
-	out := []string{}
-	for _, f := range fwds {
-		out = append(out, fmt.Sprintf(
-			"Forwarding %s:%s to %s:%s",
-			f.localIP, f.localPort, f.remoteIP, f.remotePort,
-		))
+func printLocalDirectForwarding(
+	ctx context.Context,
+	cli cliutil.CLI,
+	client dockerclient.CommonAPIClient,
+	fwd directForwarding,
+	forwarderID string,
+) error {
+	if len(fwd.localPort) == 0 {
+		forwarder, err := client.ContainerInspect(ctx, forwarderID)
+		if err != nil {
+			return fmt.Errorf("cannot inspect forwarder container: %w", err)
+		}
+
+		bindings := lookupPortBindings(forwarder, fwd.remotePort)
+		if len(bindings) == 0 {
+			logrus.Debugf("Empty port bindings in forwarder %s", forwarder.ID)
+			fwd.localPort = "<unknown>"
+		} else {
+			// Every forwarder should have just one port exposed.
+			fwd.localPort = bindings[0].HostPort
+		}
 	}
-	return strings.Join(out, "\n")
+
+	cli.PrintOut(
+		"Forwarding %s:%s to %s:%s\n",
+		fwd.localHost, fwd.localPort,
+		fwd.remoteHost, fwd.remotePort,
+	)
+
+	return nil
+}
+
+func printLocalSidecarForwarding(
+	ctx context.Context,
+	cli cliutil.CLI,
+	client dockerclient.CommonAPIClient,
+	fwd sidecarForwarding,
+	forwarderID string,
+) error {
+	if len(fwd.localPort) == 0 {
+		forwarder, err := client.ContainerInspect(ctx, forwarderID)
+		if err != nil {
+			return fmt.Errorf("cannot inspect forwarder container: %w", err)
+		}
+
+		bindings := lookupPortBindings(forwarder, fwd.sidecarPort)
+		if len(bindings) == 0 {
+			logrus.Debugf("Empty port bindings in forwarder %s", forwarder.ID)
+			fwd.localPort = "<unknown>"
+		} else {
+			// Every forwarder should have just one port exposed.
+			fwd.localPort = bindings[0].HostPort
+		}
+	}
+
+	cli.PrintOut(
+		"Forwarding %s:%s to %s:%s through %s:%s\n",
+		fwd.localHost, fwd.localPort,
+		fwd.remoteHost, fwd.remotePort,
+		fwd.targetHost, fwd.sidecarPort,
+	)
+
+	return nil
+}
+
+func cleanupContainerIfExist(
+	client dockerclient.CommonAPIClient,
+	contID string,
+) {
+	if len(contID) == 0 {
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), cleanupTimeout)
+	defer cancel()
+
+	if err := client.ContainerRemove(ctx, contID, types.ContainerRemoveOptions{Force: true}); err != nil {
+		logrus.Debugf("Cannot force-remove container %s: %s", contID, err)
+	}
 }
