@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math/rand"
 	"strings"
 	"sync"
 	"time"
@@ -17,7 +18,6 @@ import (
 
 	"github.com/iximiuz/cdebug/pkg/cliutil"
 	"github.com/iximiuz/cdebug/pkg/docker"
-	"github.com/iximiuz/cdebug/pkg/jsonutil"
 	"github.com/iximiuz/cdebug/pkg/signalutil"
 	"github.com/iximiuz/cdebug/pkg/uuid"
 )
@@ -30,15 +30,16 @@ import (
 //   - Remote port forwarding: implement me!
 //
 // Local port forwarding's possible modes (kinda sorta as in ssh -L):
-//   - REMOTE_PORT                                # binds REMOTE_IP:REMOTE_PORT to a random port on localhost
-//   - REMOTE_<IP|ALIAS|NET>:REMOTE_PORT          # The second form is needed to:
-//                                                #  1) allow exposing target's localhost ports
-//                                                #  2) specify a concrete IP for a multi-network target
+//   - REMOTE_PORT                                # binds TARGET_IP:REMOTE_PORT to a random port on localhost
+//   - REMOTE_<IP|ALIAS|NET>:REMOTE_PORT          # binds arbitrary REMOTE_ID:REMOTE_PORT to a random port on localhost
+//                                                #  1) allows exposing target's localhost ports
+//                                                #  2) allows specifyng a concrete IP for a multi-network target
+//                                                #  3) allows specifyng an arbitrary destination reachable from the target
 //
-//   - LOCAL_PORT:REMOTE_PORT                     # binds REMOTE_IP:REMOTE_PORT to LOCAL_PORT on localhost
+//   - LOCAL_PORT:REMOTE_PORT                     # much like the above form but uses a concrete port on the host system
 //   - LOCAL_PORT:REMOTE_<IP|ALIAS|NET>:REMOTE_PORT
 //
-//   - LOCAL_HOST:LOCAL_PORT:REMOTE_PORT          # similar to LOCAL_PORT:REMOTE_PORT but LOCAL_HOST is used instead of localhost
+//   - LOCAL_HOST:LOCAL_PORT:REMOTE_PORT          # similar to LOCAL_PORT:REMOTE_PORT but LOCAL_HOST is used instead of 127.0.0.1
 //   - LOCAL_HOST:LOCAL_PORT:REMOTE_<IP|ALIAS|NET>:REMOTE_PORT
 //
 // Remote port forwarding's possible modes (kinda sorta as in ssh -R):
@@ -49,6 +50,8 @@ const (
 
 	outFormatText = "text"
 	outFormatJSON = "json"
+
+	cleanupTimeout = 3 * time.Second
 )
 
 var (
@@ -136,6 +139,7 @@ func runPortForward(ctx context.Context, cli cliutil.CLI, opts *options) error {
 		return err
 	}
 
+	// TODO: Pull only if not present locally.
 	cli.PrintAux("Pulling forwarder image...\n")
 	if err := client.ImagePullEx(ctx, forwarderImage, types.ImagePullOptions{}); err != nil {
 		return fmt.Errorf("cannot pull forwarder image %q: %w", forwarderImage, err)
@@ -205,7 +209,9 @@ func runLocalPortForward(
 	case err := <-targetErrorCh:
 		// No idea what happened to the target, but better restart the forwarders
 		// (or exit while trying because the target is already gone).
-		logrus.Debugf("Target error: %s", err)
+		if ctx.Err() == nil { // Ignoring 'context canceled' errors...
+			logrus.Debugf("Target error: %s", err)
+		}
 	}
 
 	cli.PrintAux("Stopping the forwarders...\n")
@@ -476,123 +482,111 @@ func runLocalForwarder(
 	target types.ContainerJSON,
 	fwd forwarding,
 ) error {
+	if len(fwd.localHost) == 0 {
+		fwd.localHost = "127.0.0.1"
+	}
+
 	if len(fwd.remoteHost) == 0 {
 		remoteIP, err := unambiguousIP(target)
 		if err != nil {
 			return err
 		}
-		return runLocalForwarderToTargetPublicPort(
+
+		network, err := targetNetworkByIP(target, remoteIP)
+		if err != nil {
+			return err
+		}
+
+		return runLocalForwarderDirect(
 			ctx,
 			cli,
 			client,
-			target,
-			fwd.localHost,
-			fwd.localPort,
-			remoteIP,
-			fwd.remotePort,
+			network,
+			forwarding{
+				localHost:  fwd.localHost,
+				localPort:  fwd.localPort,
+				remoteHost: remoteIP,
+				remotePort: fwd.remotePort,
+			},
 		)
 	}
 
 	if remoteIP, err := lookupTargetIP(target, fwd.remoteHost); err == nil {
-		return runLocalForwarderToTargetPublicPort(
+		network, err := targetNetworkByIP(target, remoteIP)
+		if err != nil {
+			return err
+		}
+
+		return runLocalForwarderDirect(
 			ctx,
 			cli,
 			client,
-			target,
-			fwd.localHost,
-			fwd.localPort,
-			remoteIP,
-			fwd.remotePort,
+			network,
+			forwarding{
+				localHost:  fwd.localHost,
+				localPort:  fwd.localPort,
+				remoteHost: remoteIP,
+				remotePort: fwd.remotePort,
+			},
 		)
 	}
 
-	// TODO: runLocalForwarderThroughTargetNetns()
-	return errors.New("implement me!")
+	return runLocalForwarderWithSidecar(ctx, cli, client, target, fwd)
 }
 
-func runLocalForwarderToTargetPublicPort(
+func runLocalForwarderDirect(
 	ctx context.Context,
 	cli cliutil.CLI,
 	client dockerclient.CommonAPIClient,
-	target types.ContainerJSON,
-	localHost string,
-	localPort string,
-	remoteIP string,
-	remotePort string,
+	network string,
+	fwd forwarding,
 ) error {
 	// TODO: Try start() N times.
-	forwarder, err := startLocalForwarderToTargetPublicPort(
-		ctx,
-		cli,
-		client,
-		target,
-		localHost,
-		localPort,
-		remoteIP,
-		remotePort,
-	)
+
+	forwarderID, err := startLocalForwarder(ctx, client, network, fwd)
+	defer cleanupContainerIfExist(client, forwarderID)
 	if err != nil {
-		return err
+		return fmt.Errorf("starting forwarder failed: %w", err)
 	}
 
-	killForwarder := func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-		defer cancel()
-
-		if err := client.ContainerKill(ctx, forwarder.ID, "KILL"); err != nil {
-			logrus.Debugf("Cannot kill forwarder container: %s", err)
-		}
+	if err := printOutForwarding(ctx, cli, client, fwd, forwarderID, "", ""); err != nil {
+		return err
 	}
 
 	fwderStatusCh, fwderErrCh := client.ContainerWait(
 		ctx,
-		forwarder.ID,
+		forwarderID,
 		container.WaitConditionNotRunning,
 	)
 
-	// TODO: If a forwarder was alive long enough, we may want to restart it w/o
-	//       decreasing the number of attempts.
+	// TODO: If a forwarder was alive long enough, but then suddenly exited,
+	//       we may want to restart it w/o decreasing the number of attempts.
 	select {
 	case <-ctx.Done():
-		killForwarder()
 		return nil
 
 	case status := <-fwderStatusCh:
 		return fmt.Errorf(
-			"forwarder %s exited with code %d: %w",
-			forwarder.ID, status.StatusCode, status.Error,
+			"forwarder %s exited with code %d: %v",
+			forwarderID, status.StatusCode, status.Error,
 		)
 
 	case err := <-fwderErrCh:
 		logrus.Debugf("Forwarder error: %s", err)
-		killForwarder() // Just in case...
-		return fmt.Errorf("forwarder %s hiccuped: %w", forwarder.ID, err)
+		return fmt.Errorf("forwarder %s hiccuped: %w", forwarderID, err)
 	}
 }
 
-func startLocalForwarderToTargetPublicPort(
+func startLocalForwarder(
 	ctx context.Context,
-	cli cliutil.CLI,
 	client dockerclient.CommonAPIClient,
-	target types.ContainerJSON,
-	localHost string,
-	localPort string,
-	remoteIP string,
-	remotePort string,
-) (types.ContainerJSON, error) {
-	if len(localHost) == 0 {
-		localHost = "127.0.0.1"
-	}
-
-	network, err := targetNetworkByIP(target, remoteIP)
-	if err != nil {
-		return types.ContainerJSON{}, err
-	}
-
-	portMapSpec := localHost + ":" + localPort + ":" + remotePort
+	network string,
+	fwd forwarding,
+) (string, error) {
+	portMapSpec := fwd.localHost + ":" + fwd.localPort + ":" + fwd.remotePort
 	exposedPorts, portBindings, err := nat.ParsePortSpecs([]string{portMapSpec})
 	if err != nil {
-		return types.ContainerJSON{}, err
+		return "", err
 	}
 
 	resp, err := client.ContainerCreate(
@@ -601,13 +595,13 @@ func startLocalForwarderToTargetPublicPort(
 			Image:      forwarderImage,
 			Entrypoint: []string{"socat"},
 			Cmd: []string{
-				fmt.Sprintf("TCP-LISTEN:%s,fork", remotePort),
-				fmt.Sprintf("TCP-CONNECT:%s:%s", remoteIP, remotePort),
+				fmt.Sprintf("TCP4-LISTEN:%s,fork", fwd.remotePort),
+				fmt.Sprintf("TCP-CONNECT:%s:%s", fwd.remoteHost, fwd.remotePort),
 			},
+			Env:          []string{"SOCAT_DEFAULT_LISTEN_IP=0.0.0.0"},
 			ExposedPorts: exposedPorts,
 		},
 		&container.HostConfig{
-			AutoRemove:   true,
 			PortBindings: portBindings,
 			NetworkMode:  container.NetworkMode(network),
 		},
@@ -616,32 +610,197 @@ func startLocalForwarderToTargetPublicPort(
 		"cdebug-fwd-"+uuid.ShortID(),
 	)
 	if err != nil {
-		return types.ContainerJSON{}, fmt.Errorf("cannot create forwarder container: %w", err)
+		return "", fmt.Errorf("cannot create forwarder container: %w", err)
 	}
 
 	if err := client.ContainerStart(ctx, resp.ID, types.ContainerStartOptions{}); err != nil {
-		return types.ContainerJSON{}, fmt.Errorf("cannot start forwarder container: %w", err)
+		return resp.ID, fmt.Errorf("cannot start forwarder container: %w", err)
 	}
 
-	forwarder, err := client.ContainerInspect(ctx, resp.ID)
+	return resp.ID, nil
+}
+
+func runLocalForwarderWithSidecar(
+	ctx context.Context,
+	cli cliutil.CLI,
+	client dockerclient.CommonAPIClient,
+	target types.ContainerJSON,
+	fwd forwarding,
+) error {
+	// TODO: Try starting sidecar and forwarder N times.
+
+	// In a multi-network case, pick a random one.
+	var targetNetwork, targetIP string
+	for name, settings := range target.NetworkSettings.Networks {
+		if len(settings.IPAddress) > 0 {
+			targetNetwork = name
+			targetIP = settings.IPAddress
+			break
+		}
+	}
+	if len(targetIP) == 0 {
+		return errors.New("target is not attached to any networks")
+	}
+
+	sidecarID, targetPort, err := startLocalForwarderSidecar(
+		ctx, client, target.ID, fwd.remoteHost, fwd.remotePort,
+	)
+	defer cleanupContainerIfExist(client, sidecarID)
 	if err != nil {
-		return forwarder, fmt.Errorf("cannot inspect forwarder container: %w", err)
-	}
-	if forwarder.State == nil && !forwarder.State.Running {
-		return forwarder, fmt.Errorf("unexpected forwarder container state: %v", jsonutil.Dump(forwarder.State))
+		return fmt.Errorf("starting forwarder sidecar failed: %w", err)
 	}
 
-	if len(localPort) == 0 {
-		bindings := lookupPortBindings(forwarder, remotePort)
+	forwarderID, err := startLocalForwarder(
+		ctx,
+		client,
+		targetNetwork,
+		forwarding{
+			localHost:  fwd.localHost,
+			localPort:  fwd.localPort,
+			remoteHost: targetIP,
+			remotePort: fmt.Sprintf("%d", targetPort),
+		},
+	)
+	defer cleanupContainerIfExist(client, forwarderID)
+	if err != nil {
+		return fmt.Errorf("starting forwarder faield: %w", err)
+	}
+
+	if err := printOutForwarding(
+		ctx, cli, client, fwd, forwarderID, targetIP, fmt.Sprintf("%d", targetPort),
+	); err != nil {
+		return err
+	}
+
+	sidecarStatusCh, sidecarErrCh := client.ContainerWait(
+		ctx,
+		sidecarID,
+		container.WaitConditionNotRunning,
+	)
+
+	fwderStatusCh, fwderErrCh := client.ContainerWait(
+		ctx,
+		forwarderID,
+		container.WaitConditionNotRunning,
+	)
+
+	// TODO: If a forwarder and/or was alive long enough, we may want to
+	//       restart them w/o decreasing the number of attempts.
+	select {
+	case <-ctx.Done():
+		return nil
+
+	case status := <-sidecarStatusCh:
+		return fmt.Errorf(
+			"forwarder sidecar %s exited with code %d: %v",
+			sidecarID, status.StatusCode, status.Error,
+		)
+
+	case status := <-fwderStatusCh:
+		return fmt.Errorf(
+			"forwarder %s exited with code %d: %v",
+			forwarderID, status.StatusCode, status.Error,
+		)
+
+	case err := <-sidecarErrCh:
+		logrus.Debugf("Forwarder sidecar error: %s", err)
+		return fmt.Errorf("forwarder sidecar %s hiccuped: %w", sidecarID, err)
+
+	case err := <-fwderErrCh:
+		logrus.Debugf("Forwarder error: %s", err)
+		return fmt.Errorf("forwarder %s hiccuped: %w", forwarderID, err)
+	}
+}
+
+func startLocalForwarderSidecar(
+	ctx context.Context,
+	client dockerclient.CommonAPIClient,
+	targetID string,
+	remoteHost string,
+	remotePort string,
+) (string, int, error) {
+	// TODO: This random port may conflict with a port already used by the
+	//       target container. Instead, we should use socat TCP-LISTEN:0 and
+	//       detect what port was assigned by the OS with a separate command.
+	randomPort := 32000 + rand.Intn(25000)
+	resp, err := client.ContainerCreate(
+		ctx,
+		&container.Config{
+			Image:      forwarderImage,
+			Entrypoint: []string{"socat"},
+			Cmd: []string{
+				fmt.Sprintf("TCP4-LISTEN:%d,fork", randomPort),
+				fmt.Sprintf("TCP-CONNECT:%s:%s", remoteHost, remotePort),
+			},
+			Env: []string{"SOCAT_DEFAULT_LISTEN_IP=0.0.0.0"},
+		},
+		&container.HostConfig{
+			NetworkMode: container.NetworkMode("container:" + targetID),
+		},
+		nil,
+		nil,
+		"cdebug-fwd-sidecar-"+uuid.ShortID(),
+	)
+	if err != nil {
+		return "", 0, fmt.Errorf("cannot create forwarder sidecar container: %w", err)
+	}
+
+	if err := client.ContainerStart(ctx, resp.ID, types.ContainerStartOptions{}); err != nil {
+		return resp.ID, 0, fmt.Errorf("cannot start forwarder sidecar container: %w", err)
+	}
+
+	return resp.ID, randomPort, nil
+}
+
+func printOutForwarding(
+	ctx context.Context,
+	cli cliutil.CLI,
+	client dockerclient.CommonAPIClient,
+	fwd forwarding,
+	forwarderID string,
+	proxyHost string,
+	proxyPort string,
+) error {
+	if len(fwd.localPort) == 0 {
+		forwarder, err := client.ContainerInspect(ctx, forwarderID)
+		if err != nil {
+			return fmt.Errorf("cannot inspect forwarder container: %w", err)
+		}
+
+		bindings := lookupPortBindings(forwarder, fwd.remotePort)
 		if len(bindings) == 0 {
-			logrus.Debugf("Empty bindings for port map spec %s in forwarder %s", portMapSpec, forwarder.ID)
-			localPort = "<unknown>"
+			logrus.Debugf("Empty port bindings in forwarder %s", forwarder.ID)
+			fwd.localPort = "<unknown>"
 		} else {
 			// Every forwarder should have just one port exposed.
-			localPort = bindings[0].HostPort
+			fwd.localPort = bindings[0].HostPort
 		}
 	}
 
-	cli.PrintOut("Forwarding %s:%s to %s:%s\n", localHost, localPort, remoteIP, remotePort)
-	return forwarder, nil
+	out := fmt.Sprintf(
+		"Forwarding %s:%s to %s:%s",
+		fwd.localHost, fwd.localPort, fwd.remoteHost, fwd.remotePort,
+	)
+	if len(proxyHost) > 0 {
+		out += fmt.Sprintf(" through %s:%s", proxyHost, proxyPort)
+	}
+	cli.PrintOut(out + "\n")
+
+	return nil
+}
+
+func cleanupContainerIfExist(
+	client dockerclient.CommonAPIClient,
+	contID string,
+) {
+	if len(contID) == 0 {
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), cleanupTimeout)
+	defer cancel()
+
+	if err := client.ContainerRemove(ctx, contID, types.ContainerRemoveOptions{Force: true}); err != nil {
+		logrus.Debugf("Cannot force-remove container %s: %s", contID, err)
+	}
 }
