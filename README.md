@@ -67,6 +67,9 @@ cdebug exec -it --image nixery.dev/shell/ps/vim/tshark <target-container>
 <summary>How it works</summary>
 
 The technique is based on the ideas from this [blog post](https://iximiuz.com/en/posts/docker-debug-slim-containers).
+
+![How: cdebug exec](assets/images/cdebug-exec.png)
+
 Oversimplifying, the debugger container is started like:
 
 ```sh
@@ -116,9 +119,13 @@ target's network and publishing its ports to the host using the standard means (
 
 `socat TCP-LISTEN:<REMOTE_PORT>,fork TCP-CONNECT:<REMOTE_HOST>:<REMOTE_PORT>`
 
+![How: cdebug port-forward -L (direct)](assets/images/cdebug-port-forward-local-direct.png)
+
 If the _REMOTE_HOST_ doesn't belong to the target or it's the target's localhost,
 an extra sidecar container is started in the target's network namespace with another
 socat forwarding traffic from the target public interface to `REMOTE_HOST:REMOTE_PORT`.
+
+![How: cdebug port-forward -L (sidecar)](assets/images/cdebug-port-forward-local-sidecar.png)
 
 **Remote port forwarding** will use similar tricks but combined with more advanced
 reverse tunneling.
