@@ -1,5 +1,7 @@
 # cdebug - a swiss army knife of container debugging (WIP)
 
+> This project is looking for [supporters](https://patreon.com/iximiuz)
+
 With this tool you can:
 
 - Troubleshoot containers lacking shell and/or debugging tools
