@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"strings"
 
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
@@ -44,25 +43,9 @@ func runDebuggerDocker(ctx context.Context, cli cliutil.CLI, opts *options) erro
 	resp, err := client.ContainerCreate(
 		ctx,
 		&container.Config{
-			Image:      opts.image,
-			Entrypoint: []string{"sh"},
-			Cmd: []string{
-				"-c",
-				mustRenderTemplate(
-					cli,
-					chrootEntrypoint,
-					map[string]any{
-						"ID":    runID,
-						"IsNix": strings.Contains(opts.image, "nixery"),
-						"Cmd": func() string {
-							if len(opts.cmd) == 0 {
-								return "sh"
-							}
-							return "sh -c '" + strings.Join(shellescape(opts.cmd), " ") + "'"
-						}(),
-					},
-				),
-			},
+			Image:        opts.image,
+			Entrypoint:   []string{"sh"},
+			Cmd:          []string{"-c", debuggerEntrypoint(cli, runID, opts.image, opts.cmd)},
 			Tty:          opts.tty,
 			OpenStdin:    opts.stdin,
 			AttachStdin:  opts.stdin,

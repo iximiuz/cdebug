@@ -19,26 +19,6 @@ const (
 )
 
 var (
-	chrootEntrypoint = template.Must(template.New("chroot-entrypoint").Parse(`
-set -euo pipefail
-
-{{ if .IsNix }}
-rm -rf /proc/1/root/nix
-ln -s /proc/$$/root/nix /proc/1/root/nix
-{{ end }}
-
-ln -s /proc/$$/root/bin/ /proc/1/root/.cdebug-{{ .ID }}
-
-cat > /.cdebug-entrypoint.sh <<EOF
-#!/bin/sh
-export PATH=$PATH:/.cdebug-{{ .ID }}
-
-chroot /proc/1/root {{ .Cmd }}
-EOF
-
-exec sh /.cdebug-entrypoint.sh
-`))
-
 	errTargetNotFound = errors.New("target container not found")
 
 	errTargetNotRunning = errors.New("target container found but it's not running: executing commands in stopped containers is not supported yet")
@@ -171,6 +151,50 @@ func debuggerName(name string, runID string) string {
 		return name
 	}
 	return "cdebug-" + runID
+}
+
+var (
+	chrootEntrypoint = template.Must(template.New("chroot-entrypoint").Parse(`
+set -euo pipefail
+
+{{ if .IsNix }}
+rm -rf /proc/1/root/nix
+ln -s /proc/$$/root/nix /proc/1/root/nix
+{{ end }}
+
+ln -s /proc/$$/root/bin/ /proc/1/root/.cdebug-{{ .ID }}
+
+cat > /.cdebug-entrypoint.sh <<EOF
+#!/bin/sh
+export PATH=$PATH:/.cdebug-{{ .ID }}
+
+chroot /proc/1/root {{ .Cmd }}
+EOF
+
+exec sh /.cdebug-entrypoint.sh
+`))
+)
+
+func debuggerEntrypoint(
+	cli cliutil.CLI,
+	runID string,
+	image string,
+	cmd []string,
+) string {
+	return mustRenderTemplate(
+		cli,
+		chrootEntrypoint,
+		map[string]any{
+			"ID":    runID,
+			"IsNix": strings.Contains(image, "nixery"),
+			"Cmd": func() string {
+				if len(cmd) == 0 {
+					return "sh"
+				}
+				return "sh -c '" + strings.Join(shellescape(cmd), " ") + "'"
+			}(),
+		},
+	)
 }
 
 func mustRenderTemplate(cli cliutil.CLI, t *template.Template, data any) string {

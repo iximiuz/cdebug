@@ -8,7 +8,9 @@ import (
 	"strings"
 
 	"github.com/containerd/containerd"
+	"github.com/containerd/containerd/cio"
 	"github.com/containerd/containerd/cmd/ctr/commands/content"
+	"github.com/containerd/containerd/errdefs"
 	"github.com/docker/cli/cli/streams"
 	"golang.org/x/sys/unix"
 )
@@ -66,6 +68,26 @@ func (c *Client) Namespace() string {
 	return c.namespace
 }
 
+func (c *Client) ContainerRemoveEx(
+	ctx context.Context,
+	cont containerd.Container,
+	force bool,
+) error {
+	task, err := cont.Task(ctx, cio.Load)
+	if err != nil {
+		if errdefs.IsNotFound(err) {
+			return c.containerRemove(ctx, cont)
+		}
+		return err
+	}
+
+	if err := c.taskRemove(ctx, task, force); err != nil {
+		return err
+	}
+
+	return c.containerRemove(ctx, cont)
+}
+
 func (c *Client) ImagePullEx(
 	ctx context.Context,
 	ref string,
@@ -86,6 +108,43 @@ func (c *Client) ImagePullEx(
 
 	<-progressCh
 	return image, nil
+}
+
+func (c *Client) taskRemove(
+	ctx context.Context,
+	task containerd.Task,
+	force bool,
+) error {
+	status, err := task.Status(ctx)
+	if err != nil {
+		return err
+	}
+
+	if status.Status == containerd.Created || status.Status == containerd.Stopped {
+		if _, err := task.Delete(ctx); err != nil && !errdefs.IsNotFound(err) {
+			return err
+		}
+		return nil
+	}
+
+	if !force {
+		return errors.New("cannot remove active container - stop the container first or try force removal instead")
+	}
+
+	if _, err := task.Delete(ctx, containerd.WithProcessKill); err != nil && !errdefs.IsNotFound(err) {
+		return err
+	}
+
+	return nil
+}
+
+func (c *Client) containerRemove(ctx context.Context, cont containerd.Container) error {
+	var opts []containerd.DeleteOpts
+	if _, err := cont.Image(ctx); err == nil {
+		opts = append(opts, containerd.WithSnapshotCleanup)
+	}
+
+	return cont.Delete(ctx, opts...)
 }
 
 func detectAddress(opts Options) (string, error) {
