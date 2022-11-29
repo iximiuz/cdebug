@@ -5,15 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
 	"regexp"
-	"runtime"
 	"strings"
 	"sync"
 	"syscall"
 	"time"
 
-	"github.com/Masterminds/semver"
 	"github.com/containerd/console"
 	offcontainerd "github.com/containerd/containerd"
 	"github.com/containerd/containerd/cio"
@@ -23,7 +20,6 @@ import (
 	"github.com/containerd/containerd/oci"
 	"github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/sirupsen/logrus"
-	"golang.org/x/term"
 
 	"github.com/iximiuz/cdebug/pkg/cliutil"
 	"github.com/iximiuz/cdebug/pkg/containerd"
@@ -82,7 +78,7 @@ func runDebuggerContainerd(ctx context.Context, cli cliutil.CLI, opts *options) 
 	runID := uuid.ShortID()
 	runName := debuggerName(opts.name, runID)
 
-	ociSpecNetNS, err := ociSpecContainerNetNS(ctx, target)
+	ociSpecNamespaces, err := ociSpecSharedNamespaces(ctx, target)
 	if err != nil {
 		return err
 	}
@@ -91,28 +87,30 @@ func runDebuggerContainerd(ctx context.Context, cli cliutil.CLI, opts *options) 
 		ctx,
 		runName,
 		offcontainerd.WithNewSnapshot(runName, image),
-		offcontainerd.WithNewSpec(oci.Compose(
-			oci.WithImageConfig(image),
-			oci.WithProcessArgs("sh", "-c", debuggerEntrypoint(cli, runID, opts.image, opts.cmd)),
-			func() oci.SpecOpts {
-				if opts.tty {
-					return oci.WithTTY
-				}
-				return ociSpecNoOp
-			}(),
-			func() oci.SpecOpts {
-				if opts.privileged {
-					return oci.WithPrivileged
-				}
-				return ociSpecNoOp
-			}(),
-			oci.WithAddedCapabilities(targetSpec.Process.Capabilities.Bounding),
-			ociSpecNetNS,
-		)),
-
-		// NetworkMode
-		// PidMode
-		// UTSMode
+		offcontainerd.WithNewSpec(
+			oci.Compose(
+				append(
+					[]oci.SpecOpts{
+						oci.WithImageConfig(image),
+						oci.WithProcessArgs("sh", "-c", debuggerEntrypoint(cli, runID, opts.image, opts.cmd)),
+						func() oci.SpecOpts {
+							if opts.tty {
+								return oci.WithTTY
+							}
+							return ociSpecNoOp
+						}(),
+						func() oci.SpecOpts {
+							if opts.privileged {
+								return oci.WithPrivileged
+							}
+							return ociSpecNoOp
+						}(),
+						oci.WithAddedCapabilities(targetSpec.Process.Capabilities.Bounding),
+					},
+					ociSpecNamespaces...,
+				)...,
+			),
+		),
 	)
 	if err != nil {
 		return errCannotCreate(err)
@@ -132,26 +130,18 @@ func runDebuggerContainerd(ctx context.Context, cli cliutil.CLI, opts *options) 
 		}()
 	}
 
-	var con console.Console
-	if flagT {
-		con = console.Current()
-		defer con.Reset()
-		if err := con.SetRaw(); err != nil {
-			return err
-		}
-	}
-
-	// OpenStdin: opts.stdin
-	// AttachStdin:  opts.stdin,
-	// AttachStdout: true,
-	// AttachStderr: true,
-	task, err := debugger.NewTask(ctx, nil)
+	ioc, con, err := prepareTaskIO(ctx, cli, opts.tty, opts.stdin, debugger)
 	if err != nil {
 		return err
 	}
+	if con != nil {
+		defer con.Reset()
+	}
 
-	// TODO: Attach to the debugger task
-	// TODO: Screen resizing
+	task, err := debugger.NewTask(ctx, ioc)
+	if err != nil {
+		return err
+	}
 
 	waitCh, err := task.Wait(ctx)
 	if err != nil {
@@ -162,8 +152,10 @@ func runDebuggerContainerd(ctx context.Context, cli cliutil.CLI, opts *options) 
 		return err
 	}
 
-	if err := tasks.HandleConsoleResize(ctx, task, con); err != nil {
-		logrus.WithError(err).Error("console resize")
+	if opts.tty && cli.OutputStream().IsTerminal() {
+		if err := tasks.HandleConsoleResize(ctx, task, con); err != nil {
+			logrus.WithError(err).Error("console resize")
+		}
 	}
 
 	status := <-waitCh
@@ -229,90 +221,144 @@ func ociSpecContainerNetNS(
 // 	return fmt.Sprintf("/proc/%d/ns/net", task.Pid()), nil
 // }
 
+func ociSpecSharedNamespaces(
+	ctx context.Context,
+	cont offcontainerd.Container,
+) ([]oci.SpecOpts, error) {
+	// netNS, err := ociSpecContainerNetNS(ctx, cont)
+	// if err != nil {
+	// 	return nil, err
+	// }
+
+	shared := map[specs.LinuxNamespaceType]oci.SpecOpts{
+		specs.NetworkNamespace: oci.WithHostNamespace(specs.NetworkNamespace),
+		specs.PIDNamespace:     oci.WithHostNamespace(specs.PIDNamespace),
+		specs.IPCNamespace:     oci.WithHostNamespace(specs.IPCNamespace),
+		specs.UTSNamespace:     oci.WithHostNamespace(specs.UTSNamespace),
+	}
+
+	task, err := cont.Task(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	spec, err := cont.Spec(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	fsType := map[specs.LinuxNamespaceType]string{
+		specs.NetworkNamespace: "net",
+		specs.PIDNamespace:     "pid",
+		specs.IPCNamespace:     "ipc",
+		specs.UTSNamespace:     "uts",
+	}
+
+	for _, ns := range spec.Linux.Namespaces {
+		if _, ok := shared[ns.Type]; ok {
+			shared[ns.Type] = oci.WithLinuxNamespace(specs.LinuxNamespace{
+				Type: ns.Type,
+				Path: fmt.Sprintf("/proc/%d/ns/%s", task.Pid(), fsType[ns.Type]),
+			})
+		}
+	}
+
+	list := []oci.SpecOpts{}
+	for _, opt := range shared {
+		list = append(list, opt)
+	}
+	return list, nil
+}
+
 func ociSpecNoOp(context.Context, oci.Client, *containers.Container, *oci.Spec) error {
 	return nil
 }
 
-func NewTask(
+func prepareTaskIO(
 	ctx context.Context,
-	client *containerd.Client,
-	container containerd.Container,
-	flagI, flagT bool,
-	con console.Console,
-) (containerd.Task, error) {
-	var ioCreator cio.Creator
-	if flagT {
-		if con == nil {
-			return nil, errors.New("got nil con with flagT=true")
+	cli cliutil.CLI,
+	tty bool,
+	stdin bool,
+	cont offcontainerd.Container,
+) (cio.Creator, console.Console, error) {
+	if tty {
+		var con console.Console
+		if cli.OutputStream().IsTerminal() {
+			con = console.Current()
+			if err := con.SetRaw(); err != nil {
+				return nil, nil, err
+			}
 		}
+
 		var in io.Reader
-		if flagI {
-			// FIXME: check IsTerminal on Windows too
-			if runtime.GOOS != "windows" && !term.IsTerminal(0) {
-				return nil, errors.New("the input device is not a TTY")
+		if stdin {
+			if con == nil {
+				return nil, nil, errors.New("input must be a terminal")
 			}
 			in = con
 		}
-		ioCreator = cio.NewCreator(cio.WithStreams(in, con, nil), cio.WithTerminal)
-	} else {
-		var in io.Reader
-		if flagI {
-			if sv, err := infoutil.ServerSemVer(ctx, client); err != nil {
-				logrus.Warn(err)
-			} else if sv.LessThan(semver.MustParse("1.6.0-0")) {
-				logrus.Warnf("`nerdctl (run|exec) -i` without `-t` expects containerd 1.6 or later, got containerd %v", sv)
-			}
-			var stdinC io.ReadCloser = &StdinCloser{
-				Stdin: os.Stdin,
-				Closer: func() {
-					if t, err := container.Task(ctx, nil); err != nil {
-						logrus.WithError(err).Debugf("failed to get task for StdinCloser")
-					} else {
-						t.CloseIO(ctx, containerd.WithStdinCloser)
-					}
-				},
-			}
-			in = stdinC
-		}
-		ioCreator = cio.NewCreator(cio.WithStreams(in, os.Stdout, os.Stderr))
+
+		return cio.NewCreator(cio.WithStreams(in, con, nil), cio.WithTerminal), con, nil
 	}
 
-	return container.NewTask(ctx, ioCreator)
+	var in io.Reader
+	if stdin {
+		in = &inCloser{
+			inputStream: cli.InputStream(),
+			close: func() {
+				if task, err := cont.Task(ctx, nil); err != nil {
+					logrus.Debugf("Failed to get task for stdinCloser: %s", err)
+				} else {
+					task.CloseIO(ctx, offcontainerd.WithStdinCloser)
+				}
+			},
+		}
+	}
+
+	return cio.NewCreator(cio.WithStreams(
+		in,
+		cli.OutputStream(),
+		cli.ErrorStream(),
+	)), nil, nil
 }
 
-// StdinCloser is from https://github.com/containerd/containerd/blob/v1.4.3/cmd/ctr/commands/tasks/exec.go#L181-L194
-type StdinCloser struct {
+type inCloser struct {
+	inputStream io.Reader
+	close       func()
+
 	mu     sync.Mutex
-	Stdin  *os.File
-	Closer func()
 	closed bool
 }
 
-func (s *StdinCloser) Read(p []byte) (int, error) {
+func (s *inCloser) Read(p []byte) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
 	if s.closed {
 		return 0, syscall.EBADF
 	}
-	n, err := s.Stdin.Read(p)
+
+	n, err := s.inputStream.Read(p)
 	if err != nil {
-		if s.Closer != nil {
-			s.Closer()
+		if s.close != nil {
+			s.close()
 			s.closed = true
 		}
 	}
+
 	return n, err
 }
 
-// Close implements Closer
-func (s *StdinCloser) Close() error {
+func (s *inCloser) Close() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
 	if s.closed {
 		return nil
 	}
-	if s.Closer != nil {
-		s.Closer()
+
+	if s.close != nil {
+		s.close()
 	}
 	s.closed = true
 	return nil
