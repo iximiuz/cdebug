@@ -136,7 +136,7 @@ reverse tunneling.
 
 </details>
 
-## Demos
+## Examples
 
 Below are a few popular scenarios formatted as reproducible demos.
 
