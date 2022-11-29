@@ -1,4 +1,4 @@
-# cdebug - a swiss army knife of container debugging (WIP)
+# cdebug - a swiss army knife of container debugging
 
 ```diff
 ! Support development of this project > patreon.com/iximiuz
@@ -247,7 +247,7 @@ $ sudo $(which nerdctl) run -d nginx
 
 Run a debugging session in the above container using its partial ID:
 
-```
+```sh
 sudo cdebug exec -it --privileged --image nixery.dev/shell/ps/tcpdump containerd://9f876
 ```
 
