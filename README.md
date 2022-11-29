@@ -16,7 +16,7 @@ The following _commands_ x _runtimes_ are supported:
 
 |                       | Docker | Containerd | Kubernetes | Kubernetes CRI | runc  |
 | :---                  | :---:  | :---:      | :---:      | :---:          | :---: |
-| `exec`                | ✅     | 🛠️         | -          | -              | -     |
+| `exec`                | ✅     | ✅         | -          | -              | -     |
 | `port-forward` local  | ✅     | -          | -          | -              | -     |
 | `port-forward` remote | 🛠️     | -          | 🛠️         | -              | -     |
 | `export`              | -      | -          | -          | -              | -     |
@@ -47,7 +47,7 @@ At the moment, the following systems are (kinda sorta) supported:
 Run an interactive shell in a scratch, slim, or distroless container, with ease:
 
 ```sh
-cdebug exec -it <target-container>
+cdebug exec -it [docker|containerd://]<container>
 ```
 
 The `cdebug exec` command is a crossbreeding of `docker exec` and `kubectl debug` commands.
@@ -212,6 +212,43 @@ Even more powerful exammple:
 
 ```sh
 $ cdebug exec -it --image nixery.dev/shell/ps/findutils/tshark my-distroless
+```
+
+### Debugging containerd containers (no Docker required)
+
+First, start the target container:
+
+```sh
+$ sudo ctr image pull docker.io/library/nginx:latest
+$ sudo ctr run -d docker.io/library/nginx:latest nginx-1
+```
+
+Run an interactive shell in the target container using simple `cdebug exec`:
+
+```
+$ sudo cdebug exec -it containerd://nginx-1
+/ $# wget -O- 127.0.0.1
+```
+
+Run VIM in the target container using `cdebug exec --image nixery.dev/shell/vim`:
+
+```sh
+$ sudo cdebug exec -it --rm --image nixery.dev/shell/vim containerd://nginx-1
+```
+
+### Debugging nerdctl containers (no Docker required)
+
+Start a container using nerdctl:
+
+```sh
+$ sudo $(which nerdctl) run -d nginx
+9f8763d82259a6e3e747df83d0ce8b7ee3d33d94269a72cd04e0e3862a3abc5f
+```
+
+Run a debugging session in the above container using its partial ID:
+
+```
+sudo cdebug exec -it --privileged --image nixery.dev/shell/ps/tcpdump containerd://9f876
 ```
 
 ### Publish "forgotten" port

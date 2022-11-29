@@ -11,3 +11,6 @@ release:
 
 release-snapshot:
 	goreleaser release --snapshot --rm-dist
+
+test-e2e:
+	go test -v -count 1 ./e2e/exec

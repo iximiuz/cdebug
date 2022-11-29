@@ -40,12 +40,17 @@ func runDebuggerDocker(ctx context.Context, cli cliutil.CLI, opts *options) erro
 
 	runID := uuid.ShortID()
 	nsMode := "container:" + target.ID
+	targetPID := 1
+	if target.HostConfig.PidMode.IsHost() {
+		targetPID = target.State.Pid
+	}
+
 	resp, err := client.ContainerCreate(
 		ctx,
 		&container.Config{
 			Image:        opts.image,
 			Entrypoint:   []string{"sh"},
-			Cmd:          []string{"-c", debuggerEntrypoint(cli, runID, opts.image, opts.cmd)},
+			Cmd:          []string{"-c", debuggerEntrypoint(cli, runID, targetPID, opts.image, opts.cmd)},
 			Tty:          opts.tty,
 			OpenStdin:    opts.stdin,
 			AttachStdin:  opts.stdin,

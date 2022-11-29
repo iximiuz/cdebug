@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"io"
-	"path/filepath"
 	"strings"
 
 	"github.com/containerd/containerd"
@@ -12,7 +11,6 @@ import (
 	"github.com/containerd/containerd/cmd/ctr/commands/content"
 	"github.com/containerd/containerd/errdefs"
 	"github.com/docker/cli/cli/streams"
-	"golang.org/x/sys/unix"
 )
 
 const (
@@ -92,6 +90,10 @@ func (c *Client) ImagePullEx(
 	ctx context.Context,
 	ref string,
 ) (containerd.Image, error) {
+	if !strings.Contains(ref, ":") {
+		ref = ref + ":latest"
+	}
+
 	pctx, stopProgress := context.WithCancel(ctx)
 	jobs := content.NewJobs(ref)
 	progressCh := make(chan struct{})
@@ -160,15 +162,4 @@ func detectAddress(opts Options) (string, error) {
 	}
 
 	return "", errors.New("cannot detect (good enough) containerd address")
-}
-
-func isSocketAccessible(sockfile string) error {
-	abs, err := filepath.Abs(sockfile)
-	if err != nil {
-		return err
-	}
-
-	// Shamelessly borrowed from nerdctl:
-	// > set AT_EACCESS to allow running nerdctl as a setuid binary
-	return unix.Faccessat(-1, abs, unix.R_OK|unix.W_OK, unix.AT_EACCESS)
 }

@@ -101,7 +101,7 @@ func NewCommand(cli cliutil.CLI) *cobra.Command {
 		&opts.image,
 		"image",
 		defaultToolkitImage,
-		`Debugging toolkit image (hint: use "busybox" or "nixery.dev/shell/tool1/tool2/etc...")`,
+		`Debugging toolkit image (hint: use "busybox" or "nixery.dev/shell/vim/ps/tool3/tool4/...")`,
 	)
 	flags.BoolVarP(
 		&opts.stdin,
@@ -158,17 +158,17 @@ var (
 set -euo pipefail
 
 {{ if .IsNix }}
-rm -rf /proc/1/root/nix
-ln -s /proc/$$/root/nix /proc/1/root/nix
+rm -rf /proc/{{ .PID }}/root/nix
+ln -s /proc/$$/root/nix /proc/{{ .PID }}/root/nix
 {{ end }}
 
-ln -s /proc/$$/root/bin/ /proc/1/root/.cdebug-{{ .ID }}
+ln -s /proc/$$/root/bin/ /proc/{{ .PID }}/root/.cdebug-{{ .ID }}
 
 cat > /.cdebug-entrypoint.sh <<EOF
 #!/bin/sh
 export PATH=$PATH:/.cdebug-{{ .ID }}
 
-chroot /proc/1/root {{ .Cmd }}
+chroot /proc/{{ .PID }}/root {{ .Cmd }}
 EOF
 
 exec sh /.cdebug-entrypoint.sh
@@ -178,6 +178,7 @@ exec sh /.cdebug-entrypoint.sh
 func debuggerEntrypoint(
 	cli cliutil.CLI,
 	runID string,
+	targetPID int,
 	image string,
 	cmd []string,
 ) string {
@@ -186,6 +187,7 @@ func debuggerEntrypoint(
 		chrootEntrypoint,
 		map[string]any{
 			"ID":    runID,
+			"PID":   targetPID,
 			"IsNix": strings.Contains(image, "nixery"),
 			"Cmd": func() string {
 				if len(cmd) == 0 {

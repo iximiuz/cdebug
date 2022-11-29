@@ -54,14 +54,14 @@ func runDebuggerContainerd(ctx context.Context, cli cliutil.CLI, opts *options) 
 	}
 	target := found[0]
 
-	if task, err := target.Task(ctx, nil); err != nil {
+	targetTask, err := target.Task(ctx, nil)
+	if err != nil {
 		return err
-	} else {
-		if status, err := task.Status(ctx); err != nil {
-			return err
-		} else if status.Status != offcontainerd.Running {
-			return errTargetNotRunning
-		}
+	}
+	if status, err := targetTask.Status(ctx); err != nil {
+		return err
+	} else if status.Status != offcontainerd.Running {
+		return errTargetNotRunning
 	}
 
 	targetSpec, err := target.Spec(ctx)
@@ -78,9 +78,9 @@ func runDebuggerContainerd(ctx context.Context, cli cliutil.CLI, opts *options) 
 	runID := uuid.ShortID()
 	runName := debuggerName(opts.name, runID)
 
-	ociSpecNamespaces, err := ociSpecSharedNamespaces(ctx, target)
-	if err != nil {
-		return err
+	targetPID := int(targetTask.Pid())
+	if hasNamespace(targetSpec.Linux.Namespaces, specs.PIDNamespace) {
+		targetPID = 1
 	}
 
 	debugger, err := client.NewContainer(
@@ -90,9 +90,13 @@ func runDebuggerContainerd(ctx context.Context, cli cliutil.CLI, opts *options) 
 		offcontainerd.WithNewSpec(
 			oci.Compose(
 				append(
+					// Order is important here!
 					[]oci.SpecOpts{
-						oci.WithImageConfig(image),
-						oci.WithProcessArgs("sh", "-c", debuggerEntrypoint(cli, runID, opts.image, opts.cmd)),
+						oci.WithDefaultPathEnv,
+						oci.WithImageConfig(image), // May override the default $PATH.
+						oci.WithProcessArgs("sh", "-c", debuggerEntrypoint(
+							cli, runID, targetPID, opts.image, opts.cmd,
+						)),
 						func() oci.SpecOpts {
 							if opts.tty {
 								return oci.WithTTY
@@ -107,7 +111,7 @@ func runDebuggerContainerd(ctx context.Context, cli cliutil.CLI, opts *options) 
 						}(),
 						oci.WithAddedCapabilities(targetSpec.Process.Capabilities.Bounding),
 					},
-					ociSpecNamespaces...,
+					debuggerNamespacesSpec(targetTask.Pid(), targetSpec.Linux.Namespaces)...,
 				)...,
 			),
 		),
@@ -165,109 +169,49 @@ func runDebuggerContainerd(ctx context.Context, cli cliutil.CLI, opts *options) 
 	return nil
 }
 
-func ociSpecContainerNetNS(
-	ctx context.Context,
-	cont offcontainerd.Container,
-) (oci.SpecOpts, error) {
-	// filepath.Join(dataStore, "containers", ns, id), nil
-	// contStateDir, err := getContainerStateDirPath(cmd, dataStore, cont.ID())
-	// if err != nil {
-	// 	return nil, err
-	// }
-
-	spec, err := cont.Spec(ctx)
-	if err != nil {
-		return nil, err
+var (
+	namespaceTypeMap = map[specs.LinuxNamespaceType]string{
+		specs.NetworkNamespace: "net",
+		specs.PIDNamespace:     "pid",
+		specs.IPCNamespace:     "ipc",
+		specs.UTSNamespace:     "uts",
 	}
+)
 
-	for _, ns := range spec.Linux.Namespaces {
-		if ns.Type == specs.NetworkNamespace {
-			return oci.WithLinuxNamespace(ns), nil
-		}
-	}
-
-	return ociSpecNoOp, nil
-
-	// fmt.Sprintf("/proc/%d/ns/net", task.Pid())
-	// netNSPath, err := getContainerNetNSPath(ctx, cont)
-	// if err != nil {
-	// 	return nil, err
-	// }
-
-	// return oci.Compose(
-	// 	oci.WithLinuxNamespace(specs.LinuxNamespace{
-	// 		Type: specs.NetworkNamespace,
-	// 		Path: netNSPath,
-	// 	}),
-	// 	withCustomResolvConf(filepath.Join(contStateDir, "resolv.conf")),
-	// 	withCustomHosts(hostsstore.HostsPath(dataStore, ns, cont.ID())),
-	// 	oci.WithHostname(spec.Hostname),
-	// 	withCustomEtcHostname(filepath.Join(contStateDir, "hostname")),
-	// ), nil
-}
-
-// func getContainerNetNSPath(ctx context.Context, c containerd.Container) (string, error) {
-// 	task, err := c.Task(ctx, nil)
-// 	if err != nil {
-// 		return "", err
-// 	}
-// 	status, err := task.Status(ctx)
-// 	if err != nil {
-// 		return "", err
-// 	}
-// 	if status.Status != containerd.Running {
-// 		return "", fmt.Errorf("invalid target container: %s, should be running", c.ID())
-// 	}
-// 	return fmt.Sprintf("/proc/%d/ns/net", task.Pid()), nil
-// }
-
-func ociSpecSharedNamespaces(
-	ctx context.Context,
-	cont offcontainerd.Container,
-) ([]oci.SpecOpts, error) {
-	// netNS, err := ociSpecContainerNetNS(ctx, cont)
-	// if err != nil {
-	// 	return nil, err
-	// }
-
-	shared := map[specs.LinuxNamespaceType]oci.SpecOpts{
+func debuggerNamespacesSpec(
+	targetPID uint32,
+	targetNamespaces []specs.LinuxNamespace,
+) []oci.SpecOpts {
+	debuggerNamespaces := map[specs.LinuxNamespaceType]oci.SpecOpts{
 		specs.NetworkNamespace: oci.WithHostNamespace(specs.NetworkNamespace),
 		specs.PIDNamespace:     oci.WithHostNamespace(specs.PIDNamespace),
 		specs.IPCNamespace:     oci.WithHostNamespace(specs.IPCNamespace),
 		specs.UTSNamespace:     oci.WithHostNamespace(specs.UTSNamespace),
 	}
 
-	task, err := cont.Task(ctx, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	spec, err := cont.Spec(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	fsType := map[specs.LinuxNamespaceType]string{
-		specs.NetworkNamespace: "net",
-		specs.PIDNamespace:     "pid",
-		specs.IPCNamespace:     "ipc",
-		specs.UTSNamespace:     "uts",
-	}
-
-	for _, ns := range spec.Linux.Namespaces {
-		if _, ok := shared[ns.Type]; ok {
-			shared[ns.Type] = oci.WithLinuxNamespace(specs.LinuxNamespace{
+	for _, ns := range targetNamespaces {
+		if _, ok := debuggerNamespaces[ns.Type]; ok {
+			debuggerNamespaces[ns.Type] = oci.WithLinuxNamespace(specs.LinuxNamespace{
 				Type: ns.Type,
-				Path: fmt.Sprintf("/proc/%d/ns/%s", task.Pid(), fsType[ns.Type]),
+				Path: fmt.Sprintf("/proc/%d/ns/%s", targetPID, namespaceTypeMap[ns.Type]),
 			})
 		}
 	}
 
-	list := []oci.SpecOpts{}
-	for _, opt := range shared {
-		list = append(list, opt)
+	res := []oci.SpecOpts{}
+	for _, opt := range debuggerNamespaces {
+		res = append(res, opt)
 	}
-	return list, nil
+	return res
+}
+
+func hasNamespace(list []specs.LinuxNamespace, typ specs.LinuxNamespaceType) bool {
+	for _, ns := range list {
+		if ns.Type == typ {
+			return true
+		}
+	}
+	return false
 }
 
 func ociSpecNoOp(context.Context, oci.Client, *containers.Container, *oci.Spec) error {
