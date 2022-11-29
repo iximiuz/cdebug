@@ -1,11 +1,13 @@
 package fixture
 
 import (
+	"os/exec"
 	"strings"
 	"testing"
 
-	"github.com/iximiuz/cdebug/pkg/uuid"
 	"gotest.tools/icmd"
+
+	"github.com/iximiuz/cdebug/pkg/uuid"
 )
 
 const (
@@ -24,6 +26,17 @@ func ctrCmd(args ...string) icmd.Cmd {
 func dockerCmd(args ...string) icmd.Cmd {
 	return icmd.Command(
 		"sudo", append([]string{"docker"}, args...)...,
+	)
+}
+
+func nerdctlCmd(args ...string) icmd.Cmd {
+	nerdctl, err := exec.LookPath("nerdctl")
+	if err != nil {
+		panic("cannot find nerdctl")
+	}
+
+	return icmd.Command(
+		"sudo", append([]string{nerdctl}, args...)...,
 	)
 }
 
@@ -70,6 +83,28 @@ func DockerRunBackground(
 	contID := strings.TrimSpace(res.Stdout())
 	cleanup := func() {
 		icmd.RunCmd(dockerCmd("rm", "-f", contID)).Assert(t, icmd.Success)
+	}
+
+	return contID, cleanup
+}
+
+func NerdctlRunBackground(
+	t *testing.T,
+	image string,
+	flags []string,
+	args ...string,
+) (string, func()) {
+	cmd := nerdctlCmd("run", "-d")
+	cmd.Command = append(cmd.Command, flags...)
+	cmd.Command = append(cmd.Command, image)
+	cmd.Command = append(cmd.Command, args...)
+
+	res := icmd.RunCmd(cmd)
+	res.Assert(t, icmd.Success)
+
+	contID := strings.TrimSpace(res.Stdout())
+	cleanup := func() {
+		icmd.RunCmd(nerdctlCmd("rm", "-f", contID)).Assert(t, icmd.Success)
 	}
 
 	return contID, cleanup

@@ -16,6 +16,13 @@ import (
 
 const (
 	defaultToolkitImage = "docker.io/library/busybox:latest"
+
+	schemaContainerd = "containerd://"
+	schemaDocker     = "docker://"
+	schemaKubeCRI    = "cri://"
+	schemaKubeLong   = "kubernetes://"
+	schemaKubeShort  = "k8s://"
+	schemaNerdctl    = "nerdctl://"
 )
 
 var (
@@ -34,6 +41,7 @@ func errCannotCreate(cause error) error {
 
 type options struct {
 	target     string
+	schema     string
 	name       string
 	image      string
 	tty        bool
@@ -66,18 +74,28 @@ func NewCommand(cli cliutil.CLI) *cobra.Command {
 				opts.cmd = args[1:]
 			}
 
+			if sep := strings.Index(opts.target, "://"); sep != -1 {
+				opts.schema = opts.target[:sep+3]
+				opts.target = opts.target[sep+3:]
+			} else {
+				opts.schema = schemaDocker
+			}
+
 			ctx := context.Background()
-			if strings.HasPrefix(opts.target, "containerd://") {
-				opts.target = strings.TrimPrefix(opts.target, "containerd://")
+
+			switch opts.schema {
+			case schemaContainerd, schemaNerdctl:
 				return cliutil.WrapStatusError(runDebuggerContainerd(ctx, cli, &opts))
-			}
 
-			if strings.HasPrefix(opts.target, "k8s://") || strings.HasPrefix(opts.target, "kubernetes://") {
-				return errors.New("coming soon...")
-			}
+			case schemaDocker:
+				return cliutil.WrapStatusError(runDebuggerDocker(ctx, cli, &opts))
 
-			// Default
-			return cliutil.WrapStatusError(runDebuggerDocker(ctx, cli, &opts))
+			case schemaKubeCRI, schemaKubeLong, schemaKubeShort:
+				return cliutil.WrapStatusError(errors.New("coming soon..."))
+
+			default:
+				return cliutil.WrapStatusError(fmt.Errorf("unknown schema %q", opts.schema))
+			}
 		},
 	}
 

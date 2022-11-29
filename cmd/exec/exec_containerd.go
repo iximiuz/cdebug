@@ -27,8 +27,8 @@ import (
 )
 
 func runDebuggerContainerd(ctx context.Context, cli cliutil.CLI, opts *options) error {
-	if strings.ContainsAny(opts.namespace, "/.") {
-		return errors.New("namespaces with '/' or '.' are unsupported")
+	if strings.Contains(opts.namespace, "/") {
+		return errors.New("namespaces with '/' are unsupported")
 	}
 
 	client, err := containerd.NewClient(containerd.Options{
@@ -42,7 +42,15 @@ func runDebuggerContainerd(ctx context.Context, cli cliutil.CLI, opts *options) 
 
 	ctx = namespaces.WithNamespace(ctx, client.Namespace())
 
-	found, err := client.Containers(ctx, fmt.Sprintf("id~=^%s.*$", regexp.QuoteMeta(opts.target)))
+	filters := []string{
+		fmt.Sprintf("id~=^%s.*$", regexp.QuoteMeta(opts.target)),
+	}
+	if opts.schema == schemaNerdctl {
+		// Tiny helper for nerdctl-started containers
+		filters = append(filters, fmt.Sprintf(`labels."nerdctl/name"==%s`, opts.target))
+	}
+
+	found, err := client.Containers(ctx, filters...)
 	if err != nil {
 		return err
 	}
@@ -107,9 +115,25 @@ func runDebuggerContainerd(ctx context.Context, cli cliutil.CLI, opts *options) 
 							if opts.privileged {
 								return oci.WithPrivileged
 							}
-							return ociSpecNoOp
+
+							// Take the target's config as is:
+							return oci.Compose(
+								oci.WithCapabilities(targetSpec.Process.Capabilities.Effective),
+								oci.WithMaskedPaths(targetSpec.Linux.MaskedPaths),
+								oci.WithReadonlyPaths(targetSpec.Linux.ReadonlyPaths),
+								// TODO: oci.WithWriteableSysfs,
+								// TODO: oci.WithWriteableCgroupfs,
+								oci.WithSelinuxLabel(targetSpec.Process.SelinuxLabel),
+								oci.WithApparmorProfile(targetSpec.Process.ApparmorProfile),
+								func(_ context.Context, _ oci.Client, _ *containers.Container, s *oci.Spec) error {
+									if s.Linux == nil {
+										s.Linux = &specs.Linux{}
+									}
+									s.Linux.Seccomp = targetSpec.Linux.Seccomp
+									return nil
+								},
+							)
 						}(),
-						oci.WithAddedCapabilities(targetSpec.Process.Capabilities.Bounding),
 					},
 					debuggerNamespacesSpec(targetTask.Pid(), targetSpec.Linux.Namespaces)...,
 				)...,
