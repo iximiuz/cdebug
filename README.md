@@ -280,8 +280,6 @@ Now you can exec into a Pod's container bringing your own debugging tools:
 $ cdebug exec -n k8s.io -it --rm containerd://2220ea
 ```
 
-Start a container using nerdctl:
-
 ### Publish "forgotten" port
 
 Start an nginx container but don't expose its port 80:
