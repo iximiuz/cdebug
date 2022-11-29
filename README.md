@@ -241,15 +241,46 @@ $ sudo cdebug exec -it --rm --image nixery.dev/shell/vim containerd://nginx-1
 Start a container using nerdctl:
 
 ```sh
-$ sudo $(which nerdctl) run -d nginx
+$ sudo $(which nerdctl) run -d --name nginx-1 nginx
 9f8763d82259a6e3e747df83d0ce8b7ee3d33d94269a72cd04e0e3862a3abc5f
 ```
 
-Run a debugging session in the above container using its partial ID:
+Run the debugger using the `nerdctl://` schema and the target's name:
 
 ```sh
-sudo cdebug exec -it --privileged --image nixery.dev/shell/ps/tcpdump containerd://9f876
+$ sudo cdebug exec -it --rm nerdctl://nginx-1
 ```
+
+Or run a debugging session in the above container using the `containerd://` schema:
+
+```sh
+$ sudo cdebug exec -it --rm containerd://9f876
+```
+
+### Debugging Kubernetes Pods (node access is assumed)
+
+Currently, only containerd CRI is supported. First, you'll need to list the running
+containers:
+
+```sh
+$ ctr -n k8s.io container ls
+CONTAINER       IMAGE                                       RUNTIME
+155227c0e9aa8   k8s.gcr.io/pause:3.5                        io.containerd.runc.v2
+2220eacd9cb26   registry.k8s.io/kube-apiserver:v1.25.3      io.containerd.runc.v2
+22efcb35a651a   registry.k8s.io/etcd:3.5.4-0                io.containerd.runc.v2
+28e06cc63b822   docker.io/calico/cni:v3.24.1                io.containerd.runc.v2
+30754c8492f18   docker.io/calico/node:v3.24.1               io.containerd.runc.v2
+61acdb0231516   docker.io/calico/kube-controllers:v3.24.1   io.containerd.runc.v2
+...
+```
+
+Now you can exec into a Pod's container bringing your own debugging tools:
+
+```sh
+$ cdebug exec -n k8s.io -it --rm containerd://2220ea
+```
+
+Start a container using nerdctl:
 
 ### Publish "forgotten" port
 
