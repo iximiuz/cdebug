@@ -14,6 +14,7 @@ import (
 	"github.com/containerd/console"
 	offcontainerd "github.com/containerd/containerd"
 	"github.com/containerd/containerd/cio"
+	"github.com/containerd/containerd/cmd/ctr/commands"
 	"github.com/containerd/containerd/cmd/ctr/commands/tasks"
 	"github.com/containerd/containerd/containers"
 	"github.com/containerd/containerd/namespaces"
@@ -97,46 +98,42 @@ func runDebuggerContainerd(ctx context.Context, cli cliutil.CLI, opts *options) 
 		offcontainerd.WithNewSnapshot(runName, image),
 		offcontainerd.WithNewSpec(
 			oci.Compose(
-				append(
-					// Order is important here!
-					[]oci.SpecOpts{
-						oci.WithDefaultPathEnv,
-						oci.WithImageConfig(image), // May override the default $PATH.
-						oci.WithProcessArgs("sh", "-c", debuggerEntrypoint(
-							cli, runID, targetPID, opts.image, opts.cmd,
-						)),
-						func() oci.SpecOpts {
-							if opts.tty {
-								return oci.WithTTY
-							}
-							return ociSpecNoOp
-						}(),
-						func() oci.SpecOpts {
-							if opts.privileged {
-								return oci.WithPrivileged
-							}
+				// Order is important here!
+				oci.WithDefaultPathEnv,
+				oci.WithImageConfig(image), // May override the default $PATH.
+				oci.WithProcessArgs("sh", "-c", debuggerEntrypoint(
+					cli, runID, targetPID, opts.image, opts.cmd,
+				)),
+				func() oci.SpecOpts {
+					if opts.tty {
+						return oci.WithTTY
+					}
+					return ociSpecNoOp
+				}(),
+				func() oci.SpecOpts {
+					if opts.privileged {
+						return oci.WithPrivileged
+					}
 
-							// Take the target's config as is:
-							return oci.Compose(
-								oci.WithCapabilities(targetSpec.Process.Capabilities.Effective),
-								oci.WithMaskedPaths(targetSpec.Linux.MaskedPaths),
-								oci.WithReadonlyPaths(targetSpec.Linux.ReadonlyPaths),
-								// TODO: oci.WithWriteableSysfs,
-								// TODO: oci.WithWriteableCgroupfs,
-								oci.WithSelinuxLabel(targetSpec.Process.SelinuxLabel),
-								oci.WithApparmorProfile(targetSpec.Process.ApparmorProfile),
-								func(_ context.Context, _ oci.Client, _ *containers.Container, s *oci.Spec) error {
-									if s.Linux == nil {
-										s.Linux = &specs.Linux{}
-									}
-									s.Linux.Seccomp = targetSpec.Linux.Seccomp
-									return nil
-								},
-							)
-						}(),
-					},
-					debuggerNamespacesSpec(targetTask.Pid(), targetSpec.Linux.Namespaces)...,
-				)...,
+					// Take the target's config as is:
+					return oci.Compose(
+						oci.WithCapabilities(targetSpec.Process.Capabilities.Effective),
+						oci.WithMaskedPaths(targetSpec.Linux.MaskedPaths),
+						oci.WithReadonlyPaths(targetSpec.Linux.ReadonlyPaths),
+						// TODO: oci.WithWriteableSysfs,
+						// TODO: oci.WithWriteableCgroupfs,
+						oci.WithSelinuxLabel(targetSpec.Process.SelinuxLabel),
+						oci.WithApparmorProfile(targetSpec.Process.ApparmorProfile),
+						func(_ context.Context, _ oci.Client, _ *containers.Container, s *oci.Spec) error {
+							if s.Linux == nil {
+								s.Linux = &specs.Linux{}
+							}
+							s.Linux.Seccomp = targetSpec.Linux.Seccomp
+							return nil
+						},
+					)
+				}(),
+				debuggerNamespacesSpec(targetTask.Pid(), targetSpec.Linux.Namespaces),
 			),
 		),
 	)
@@ -184,6 +181,9 @@ func runDebuggerContainerd(ctx context.Context, cli cliutil.CLI, opts *options) 
 		if err := tasks.HandleConsoleResize(ctx, task, con); err != nil {
 			logrus.WithError(err).Error("console resize")
 		}
+	} else {
+		sigc := commands.ForwardAllSignals(ctx, task)
+		defer commands.StopCatch(sigc)
 	}
 
 	status := <-waitCh
@@ -205,7 +205,7 @@ var (
 func debuggerNamespacesSpec(
 	targetPID uint32,
 	targetNamespaces []specs.LinuxNamespace,
-) []oci.SpecOpts {
+) oci.SpecOpts {
 	debuggerNamespaces := map[specs.LinuxNamespaceType]oci.SpecOpts{
 		specs.NetworkNamespace: oci.WithHostNamespace(specs.NetworkNamespace),
 		specs.PIDNamespace:     oci.WithHostNamespace(specs.PIDNamespace),
@@ -222,11 +222,11 @@ func debuggerNamespacesSpec(
 		}
 	}
 
-	res := []oci.SpecOpts{}
+	opts := []oci.SpecOpts{}
 	for _, opt := range debuggerNamespaces {
-		res = append(res, opt)
+		opts = append(opts, opt)
 	}
-	return res
+	return oci.Compose(opts...)
 }
 
 func hasNamespace(list []specs.LinuxNamespace, typ specs.LinuxNamespaceType) bool {
