@@ -1,6 +1,8 @@
 # cdebug - a swiss army knife of container debugging (WIP)
 
-> This project is looking for [supporters](https://patreon.com/iximiuz) 👀
+```diff
+- you can support this project > patreon.com/iximiuz 👀
+``` 
 
 With this tool you can:
 
