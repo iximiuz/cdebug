@@ -1,7 +1,7 @@
 # cdebug - a swiss army knife of container debugging (WIP)
 
 ```diff
-- Support development of this project > patreon.com/iximiuz
+! Support development of this project > patreon.com/iximiuz
 ``` 
 
 With this tool you can:
