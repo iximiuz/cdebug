@@ -211,9 +211,6 @@ func debuggerEntrypoint(
 				if len(cmd) == 0 {
 					// bash provides a much better UX out of the box, so
 					// let's try to use bash if we know it's likely available.
-					if strings.Contains(image, "busybox") {
-						return "bash"
-					}
 					if strings.HasPrefix(image, "nixery.dev") && strings.Contains(image, "/shell") {
 						return "bash"
 					}
