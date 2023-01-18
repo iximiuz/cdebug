@@ -2,7 +2,7 @@
 
 ```diff
 ! Support development of this project > patreon.com/iximiuz
-``` 
+```
 
 With this tool you can:
 
@@ -32,6 +32,14 @@ GOARCH=amd64
 curl -Ls https://github.com/iximiuz/cdebug/releases/latest/download/cdebug_${GOOS}_${GOARCH}.tar.gz | tar xvz
 
 sudo mv cdebug /usr/local/bin
+```
+
+### Homebrew
+
+If you're a [Homebrew](https://brew.sh/) user, you can install the tool via brew on macOS or Linux:
+
+```sh
+$ brew install cdebug
 ```
 
 At the moment, the following systems are (kinda sorta) supported:
