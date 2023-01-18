@@ -89,6 +89,7 @@ func (c *Client) ContainerRemoveEx(
 func (c *Client) ImagePullEx(
 	ctx context.Context,
 	ref string,
+	platform string,
 ) (containerd.Image, error) {
 	if !strings.Contains(ref, ":") {
 		ref = ref + ":latest"
@@ -102,7 +103,12 @@ func (c *Client) ImagePullEx(
 		close(progressCh)
 	}()
 
-	image, err := c.Pull(ctx, ref, containerd.WithPullUnpack)
+	image, err := c.Pull(
+		ctx,
+		ref,
+		containerd.WithPullUnpack,
+		containerd.WithPlatform(platform),
+	)
 	stopProgress()
 	if err != nil {
 		return image, err
