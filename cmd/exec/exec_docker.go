@@ -34,7 +34,14 @@ func runDebuggerDocker(ctx context.Context, cli cliutil.CLI, opts *options) erro
 	}
 
 	cli.PrintAux("Pulling debugger image...\n")
-	if err := client.ImagePullEx(ctx, opts.image, types.ImagePullOptions{}); err != nil {
+	if err := client.ImagePullEx(ctx, opts.image, types.ImagePullOptions{
+		Platform: func() string {
+			if len(opts.platform) == 0 {
+				return target.Platform
+			}
+			return opts.platform
+		}(),
+	}); err != nil {
 		return errCannotPull(opts.image, err)
 	}
 

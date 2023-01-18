@@ -52,6 +52,7 @@ type options struct {
 	quiet      bool
 
 	runtime   string
+	platform  string
 	namespace string
 }
 
@@ -159,6 +160,12 @@ func NewCommand(cli cliutil.CLI) *cobra.Command {
 		"runtime",
 		"",
 		`Runtime address ("/var/run/docker.sock" | "/run/containerd/containerd.sock" | "https://<kube-api-addr>:8433/...)`,
+	)
+	flags.StringVar(
+		&opts.platform,
+		"platform",
+		"",
+		`Platform (e.g., linux/amd64, linux/arm64) of the target container (for some runtimes it's hard to detect it automatically, but the debug sidecar must be of the same platform as the target)`,
 	)
 
 	return cmd

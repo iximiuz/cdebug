@@ -19,6 +19,7 @@ import (
 	"github.com/containerd/containerd/containers"
 	"github.com/containerd/containerd/namespaces"
 	"github.com/containerd/containerd/oci"
+	"github.com/containerd/containerd/platforms"
 	"github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/sirupsen/logrus"
 
@@ -79,7 +80,16 @@ func runDebuggerContainerd(ctx context.Context, cli cliutil.CLI, opts *options) 
 	}
 
 	cli.PrintAux("Pulling debugger image...\n")
-	image, err := client.ImagePullEx(ctx, opts.image)
+	image, err := client.ImagePullEx(
+		ctx,
+		opts.image,
+		func() string {
+			if len(opts.platform) == 0 {
+				return platforms.Format(platforms.DefaultSpec())
+			}
+			return opts.platform
+		}(),
+	)
 	if err != nil {
 		return errCannotPull(opts.image, err)
 	}

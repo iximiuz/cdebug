@@ -149,7 +149,9 @@ func runPortForward(ctx context.Context, cli cliutil.CLI, opts *options) error {
 
 	// TODO: Pull only if not present locally.
 	cli.PrintAux("Pulling forwarder image...\n")
-	if err := client.ImagePullEx(ctx, forwarderImage, types.ImagePullOptions{}); err != nil {
+	if err := client.ImagePullEx(ctx, forwarderImage, types.ImagePullOptions{
+		// Platform: ... TODO: Test if an arm64 sidecar can be attached to an amd64 target and vice versa.
+	}); err != nil {
 		return fmt.Errorf("cannot pull forwarder image %q: %w", forwarderImage, err)
 	}
 
