@@ -67,7 +67,7 @@ a debugging "sidecar" container that _feels_ like a `docker exec` session to the
 - No extra volumes or copying of debugging tools is needed.
 - The debugging tools **_are_** available in the target container.
 
-By default, the `busybox:latest` image is used for the debugger sidecar, but you can override it
+By default, the `busybox:musl` (statically compiled) image is used for the debugger sidecar, but you can override it
 with the `--image` flag. Combining this with the superpower of Nix and [Nixery](https://nixery.dev/),
 you can get all your favorite tools by simply listing them in the image name:
 

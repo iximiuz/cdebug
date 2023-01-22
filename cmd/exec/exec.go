@@ -15,7 +15,7 @@ import (
 )
 
 const (
-	defaultToolkitImage = "docker.io/library/busybox:latest"
+	defaultToolkitImage = "docker.io/library/busybox:musl"
 
 	schemaContainerd = "containerd://"
 	schemaDocker     = "docker://"
@@ -120,7 +120,7 @@ func NewCommand(cli cliutil.CLI) *cobra.Command {
 		&opts.image,
 		"image",
 		defaultToolkitImage,
-		`Debugging toolkit image (hint: use "busybox" or "nixery.dev/shell/vim/ps/tool3/tool4/...")`,
+		`Debugging toolkit image (hint: use "busybox:musl" or "nixery.dev/shell/vim/ps/tool3/tool4/...")`,
 	)
 	flags.BoolVarP(
 		&opts.stdin,
