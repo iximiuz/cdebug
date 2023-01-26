@@ -53,6 +53,16 @@ func TestExecDockerRunAsUser(t *testing.T) {
 	assert.Check(t, cmp.Contains(res.Stdout(), "BusyBox v1"))
 }
 
+func TestExecDockerRootFS(t *testing.T) {
+	targetID, cleanup := fixture.DockerRunBackground(t, fixture.ImageNginx, nil)
+	defer cleanup()
+
+	cmd := icmd.Command("cdebug", "exec", "--rm", "-q", targetID, "echo", "'$CDEBUG_ROOTFS'")
+	res := icmd.RunCmd(cmd)
+	res.Assert(t, icmd.Success)
+	assert.Check(t, cmp.Contains(res.Stdout(), "/.cdebug-"))
+}
+
 func TestExecDockerNixery(t *testing.T) {
 	targetID, cleanup := fixture.DockerRunBackground(t, fixture.ImageNginx, nil)
 	defer cleanup()

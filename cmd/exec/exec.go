@@ -285,7 +285,7 @@ exec {{ .Cmd }}
 `))
 
 	chrootEntrypoint = template.Must(template.New("chroot-entrypoint").Parse(`
-set -euo pipefail
+set -eu
 
 CURRENT_PID=$(sh -c 'echo $PPID')
 
@@ -298,11 +298,12 @@ if [ ${CURRENT_NIX_INODE} -ne ${TARGET_NIX_INODE} ]; then
 fi
 {{ end }}
 
-ln -s /proc/${CURRENT_PID}/root/bin/ /proc/{{ .TARGET_PID }}/root/.cdebug-{{ .ID }}
+ln -s /proc/${CURRENT_PID}/root/ /proc/{{ .TARGET_PID }}/root/.cdebug-{{ .ID }}
 
+export CDEBUG_ROOTFS=/.cdebug-{{ .ID }}
 cat > /.cdebug-entrypoint.sh <<EOF
 #!/bin/sh
-export PATH=$PATH:/.cdebug-{{ .ID }}
+export PATH=$PATH:/.cdebug-{{ .ID }}/bin
 
 chroot /proc/{{ .TARGET_PID }}/root {{ .Cmd }}
 EOF
@@ -346,7 +347,7 @@ func debuggerEntrypoint(
 				if len(cmd) == 0 {
 					return "sh"
 				}
-				return strings.Join(shellescape(cmd), " ")
+				return "sh -c \"" + strings.Join(shellescape(cmd), " ") + "\""
 			}(),
 		},
 	)
