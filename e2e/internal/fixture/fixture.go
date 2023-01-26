@@ -2,6 +2,8 @@ package fixture
 
 import (
 	"os/exec"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -86,6 +88,30 @@ func DockerRunBackground(
 	}
 
 	return contID, cleanup
+}
+
+func DockerBuildLocalImage(
+	t *testing.T,
+) (string, func()) {
+	localImage := "thisimageonlyexistslocally:1.0"
+
+	// Get dirname of current file, assumes that the Dockerfile lives next to this file.
+	_, filename, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatalf("Failed to get filename")
+	}
+	dirname := filepath.Dir(filename)
+
+	cmd := dockerCmd("build", "-t", localImage, dirname)
+
+	res := icmd.RunCmd(cmd)
+	res.Assert(t, icmd.Success)
+
+	cleanup := func() {
+		icmd.RunCmd(dockerCmd("rmi", localImage)).Assert(t, icmd.Success)
+	}
+
+	return localImage, cleanup
 }
 
 func NerdctlRunBackground(

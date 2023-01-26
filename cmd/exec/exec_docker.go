@@ -16,6 +16,39 @@ import (
 	"github.com/iximiuz/cdebug/pkg/uuid"
 )
 
+// debugImageExistsLocally checks if the debug image exists in the host and that it matches the target container
+// platform.
+func debugImageExistsLocally(ctx context.Context, client *docker.Client, debugImage string, debugImagePlatform string, target types.ContainerJSON) (bool, error) {
+	debugImageInspect, _, err := client.ImageInspectWithRaw(ctx, debugImage)
+	if err != nil {
+		// err means that the requested image wasn't found,
+		// therefore it needs to be pulled
+		logrus.Debugf("The image %s wasn't found locally", debugImage)
+		return false, nil
+	}
+
+	debugImageOs := debugImageInspect.Os
+	debugImageArchitecture := debugImageInspect.Architecture
+	// override through --platform flag
+	if debugImagePlatform != "" {
+		fmt.Sscanf(debugImagePlatform, "%s/%s", &debugImageOs, &debugImageArchitecture)
+	}
+
+	// target.Platform only contains the Os but doesn't have the Arch, however we can
+	// get the Os & Arch by analyzing the image using target.Image
+	targetImageInspect, _, err := client.ImageInspectWithRaw(ctx, target.Image)
+	if err != nil {
+		return false, fmt.Errorf("failed to inspect image %s: %v", target.Image, err)
+	}
+
+	// debug image exists, also check that the platform matches the target image platform
+	if debugImageArchitecture != targetImageInspect.Architecture || debugImageOs != targetImageInspect.Os {
+		return false, nil
+	}
+
+	return true, nil
+}
+
 func runDebuggerDocker(ctx context.Context, cli cliutil.CLI, opts *options) error {
 	client, err := docker.NewClient(docker.Options{
 		Out:  cli.AuxStream(),
@@ -33,16 +66,23 @@ func runDebuggerDocker(ctx context.Context, cli cliutil.CLI, opts *options) erro
 		return errTargetNotRunning
 	}
 
-	cli.PrintAux("Pulling debugger image...\n")
-	if err := client.ImagePullEx(ctx, opts.image, types.ImagePullOptions{
-		Platform: func() string {
-			if len(opts.platform) == 0 {
-				return target.Platform
-			}
-			return opts.platform
-		}(),
-	}); err != nil {
-		return errCannotPull(opts.image, err)
+	imageExists, err := debugImageExistsLocally(ctx, client, opts.image, opts.platform, target)
+	if err != nil {
+		return err
+	}
+
+	if !imageExists {
+		cli.PrintAux("Pulling debugger image...\n")
+		if err := client.ImagePullEx(ctx, opts.image, types.ImagePullOptions{
+			Platform: func() string {
+				if len(opts.platform) == 0 {
+					return target.Platform
+				}
+				return opts.platform
+			}(),
+		}); err != nil {
+			return errCannotPull(opts.image, err)
+		}
 	}
 
 	runID := uuid.ShortID()

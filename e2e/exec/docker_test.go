@@ -1,6 +1,8 @@
 package exec
 
 import (
+	"fmt"
+	"regexp"
 	"testing"
 
 	"gotest.tools/assert"
@@ -19,6 +21,27 @@ func TestExecDockerSimple(t *testing.T) {
 	)
 	res.Assert(t, icmd.Success)
 	assert.Check(t, cmp.Contains(res.Stdout(), "debian"))
+}
+
+func TestExecDockerUseLocalImage(t *testing.T) {
+	localImage, cleanupLocalImage := fixture.DockerBuildLocalImage(t)
+	defer cleanupLocalImage()
+
+	targetImageID, targetImageCleanup := fixture.DockerRunBackground(t, fixture.ImageNginx, nil)
+	defer targetImageCleanup()
+
+	res := icmd.RunCmd(
+		icmd.Command("cdebug", "--image", localImage, "-l=debug", "exec", "--rm", "-q", targetImageID, "cat", "/etc/os-release"),
+	)
+	res.Assert(t, icmd.Success)
+	assert.Check(t, cmp.Contains(res.Stdout(), "debian"))
+	assert.Assert(t, func() cmp.Result {
+		re := regexp.MustCompile("Pulling debugger image...")
+		if re.MatchString(res.Stdout()) {
+			return cmp.ResultFailure(fmt.Sprintf("Image %s shouldn't be pulled because it only exists locally", localImage))
+		}
+		return cmp.ResultSuccess
+	})
 }
 
 func TestExecDockerHostNamespaces(t *testing.T) {
