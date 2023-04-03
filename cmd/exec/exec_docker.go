@@ -73,7 +73,7 @@ func runDebuggerDocker(ctx context.Context, cli cliutil.CLI, opts *options) erro
 
 			NetworkMode: container.NetworkMode(nsMode),
 			PidMode:     container.PidMode(nsMode),
-			UTSMode:     container.UTSMode(nsMode),
+			// UTSMode:     container.UTSMode(nsMode),  <-- stopped working in Docker 1.23 for some reason
 			// TODO: CgroupnsMode: container.CgroupnsMode(nsMode),
 			// TODO: IpcMode:      container.IpcMode(nsMode)
 			// TODO: UsernsMode:   container.UsernsMode(target)
