@@ -7,10 +7,10 @@ build-dev:
 		-o cdebug
 
 release:
-	goreleaser --rm-dist
+	goreleaser --clean
 
 release-snapshot:
-	goreleaser release --snapshot --rm-dist
+	goreleaser release --snapshot --clean
 
 test-e2e:
 	go test -v -count 1 ./e2e/exec
