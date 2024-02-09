@@ -14,12 +14,12 @@ With this tool you can:
 
 The following _commands_ x _runtimes_ are supported:
 
-|                       | Docker | Containerd | Kubernetes | Kubernetes CRI | runc  |
-| :---                  | :---:  | :---:      | :---:      | :---:          | :---: |
-| `exec`                | ✅     | ✅         | -          | -              | -     |
-| `port-forward` local  | ✅     | -          | -          | -              | -     |
-| `port-forward` remote | 🛠️     | -          | 🛠️         | -              | -     |
-| `export`              | -      | -          | -          | -              | -     |
+|                       | Docker | Podman | containerd | Kubernetes | Kubernetes CRI | runc  |
+| :---                  | :---:  | :---:  | :---:      | :---:      | :---:          | :---: |
+| `exec`                | ✅     | -      | ✅         | -          | -              | -     |
+| `port-forward` local  | ✅     | -      | -          | -          | -              | -     |
+| `port-forward` remote | 🛠️      | -      | -          | 🛠️          | -              | -     |
+| `export`              | -      | -      | -          | -          | -              | -     |
 
 ## Installation
 
@@ -337,7 +337,7 @@ Chances are your target container has been started with elevated permissions whi
 
 ## Similar tools
 
-- [`docker-slim debug`](https://github.com/docker-slim/docker-slim) - a PoC `debug` command for DockerSlim (contributed by [D4N](https://github.com/D4N))
+- [`slim debug`](https://github.com/slimtoolkit/slim) - a `debug` command for Slim(toolkit) (originally contributed by [D4N](https://github.com/D4N))
 - [`debug-ctr`](https://github.com/felipecruz91/debug-ctr) - a debugger that creates a new container out of the original container with the toolkit mounted in a volume (by [Felipe Cruz Martinez](https://github.com/felipecruz91))
 - [`docker-debug`](https://github.com/zeromake/docker-debug) - much like `cdebug exec` but without the chroot trick.
 - [`docker-opener`](https://github.com/artemkaxboy/docker-opener) - a multi-purpose tool that in particular can run a shell session into your container (and if there is no shell inside, it'll bring its own busybox).
@@ -349,7 +349,7 @@ Chances are your target container has been started with elevated permissions whi
 - More `exec` flags (like in `docker run`): `--cap-add`, `--cap-drop`, `--env`, `--volume`, etc.
 - Helper command(s) suggesting nix(ery) packages
 - Non-docker runtimes (containerd, runc, k8s)
-- E2E Tests
+- More E2E Tests
 
 ## Contributions
 
