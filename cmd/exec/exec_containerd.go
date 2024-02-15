@@ -121,6 +121,12 @@ func runDebuggerContainerd(ctx context.Context, cli cliutil.CLI, opts *options) 
 					return ociSpecNoOp
 				}(),
 				func() oci.SpecOpts {
+					if opts.user != "" {
+						return oci.WithUser(opts.user)
+					}
+					return ociSpecNoOp
+				}(),
+				func() oci.SpecOpts {
 					if opts.privileged {
 						return oci.WithPrivileged
 					}

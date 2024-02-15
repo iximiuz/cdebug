@@ -63,6 +63,7 @@ func runDebuggerDocker(ctx context.Context, cli cliutil.CLI, opts *options) erro
 			AttachStdin:  opts.stdin,
 			AttachStdout: true,
 			AttachStderr: true,
+			User:         opts.user,
 		},
 		&container.HostConfig{
 			Privileged: target.HostConfig.Privileged || opts.privileged,
@@ -77,6 +78,8 @@ func runDebuggerDocker(ctx context.Context, cli cliutil.CLI, opts *options) erro
 			// TODO: CgroupnsMode: container.CgroupnsMode(nsMode),
 			// TODO: IpcMode:      container.IpcMode(nsMode)
 			// TODO: UsernsMode:   container.UsernsMode(target)
+
+			Init: ptr(false),
 		},
 		nil,
 		nil,
@@ -215,6 +218,8 @@ func (s *ioStreamer) stream(ctx context.Context) error {
 	case <-outDone:
 		return nil
 	}
+}
 
-	return nil
+func ptr[T any](v T) *T {
+	return &v
 }

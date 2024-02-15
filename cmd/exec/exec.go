@@ -23,6 +23,8 @@ const (
 	schemaKubeLong   = "kubernetes://"
 	schemaKubeShort  = "k8s://"
 	schemaNerdctl    = "nerdctl://"
+	schemaPodman     = "podman://"
+	schemaOCI        = "oci://" // runc, crun, etc.
 )
 
 var (
@@ -47,6 +49,7 @@ type options struct {
 	tty        bool
 	stdin      bool
 	cmd        []string
+	user       string
 	privileged bool
 	autoRemove bool
 	quiet      bool
@@ -60,9 +63,25 @@ func NewCommand(cli cliutil.CLI) *cobra.Command {
 	var opts options
 
 	cmd := &cobra.Command{
-		Use:   "exec [OPTIONS] CONTAINER [COMMAND] [ARG...]",
-		Short: "Start a debugger shell in the target container",
-		Args:  cobra.MinimumNArgs(1),
+		Use:   "exec [OPTIONS] [schema://]CONTAINER [COMMAND] [ARG...]",
+		Short: "Start a debugger shell in the target container, Pod, Node.",
+		Example: `# Docker:
+cdebug exec my-container
+cdebug exec docker://my-container
+cdebug exec docker://my-container cat /etc/os-release
+cdebug exec --image=busybox:musl my-container
+
+# containerd & nerdctl:
+cdebug exec containerd://my-container cat /etc/os-release
+cdebug exec nerdctl://my-container cat /etc/os-release
+
+# Kubernetes (coming soon):
+cdebug exec k8s://my-pod
+cdebug exec kubernetes://my-pod
+cdebug exec k8s://my-pod/my-container
+cdebug exec --namespace=my-ns --target=my-container k8s://my-pod
+`,
+		Args: cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cli.SetQuiet(opts.quiet)
 
@@ -91,8 +110,11 @@ func NewCommand(cli cliutil.CLI) *cobra.Command {
 			case schemaDocker:
 				return cliutil.WrapStatusError(runDebuggerDocker(ctx, cli, &opts))
 
-			case schemaKubeCRI, schemaKubeLong, schemaKubeShort:
-				return cliutil.WrapStatusError(errors.New("coming soon..."))
+			case schemaKubeLong, schemaKubeShort:
+				return cliutil.WrapStatusError(runDebuggerKubernetes(ctx, cli, &opts))
+
+			case schemaPodman, schemaOCI, schemaKubeCRI:
+				return cliutil.WrapStatusError(errors.New("coming soon"))
 
 			default:
 				return cliutil.WrapStatusError(fmt.Errorf("unknown schema %q", opts.schema))
@@ -135,6 +157,13 @@ func NewCommand(cli cliutil.CLI) *cobra.Command {
 		"t",
 		false,
 		`Allocate a pseudo-TTY (as in "docker exec -t")`,
+	)
+	flags.StringVarP(
+		&opts.user,
+		"user",
+		"u",
+		"",
+		`Run the debugger container as User (format: <name|uid>[:<group|gid>])`,
 	)
 	flags.BoolVar(
 		&opts.privileged,
