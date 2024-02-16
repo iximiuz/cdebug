@@ -1,6 +1,7 @@
 package exec
 
 import (
+	"strings"
 	"testing"
 
 	"gotest.tools/assert"
@@ -40,6 +41,32 @@ func TestExecContainerdHostNamespaces(t *testing.T) {
 	)
 	res.Assert(t, icmd.Success)
 	assert.Check(t, cmp.Contains(res.Stdout(), "debian"))
+}
+
+func TestExecContainerdRunAsUser(t *testing.T) {
+	targetID, cleanup := fixture.ContainerdRunBackground(t, fixture.ImageNginxUnprivileged, nil)
+	defer cleanup()
+
+	res := icmd.RunCmd(
+		icmd.Command(
+			"sudo", "cdebug", "exec", "-n", fixture.ContainerdCtrNamespace, "--rm", "-q", "-u", "101:101",
+			"containerd://"+targetID,
+			"id", "-u",
+		),
+	)
+	res.Assert(t, icmd.Success)
+	assert.Equal(t, res.Stderr(), "")
+	assert.Equal(t, strings.TrimSpace(res.Stdout()), "101")
+
+	res = icmd.RunCmd(
+		icmd.Command(
+			"sudo", "cdebug", "exec", "-n", fixture.ContainerdCtrNamespace, "--rm", "-q", "-u", "101:101",
+			"containerd://"+targetID,
+			"busybox",
+		),
+	)
+	res.Assert(t, icmd.Success)
+	assert.Check(t, cmp.Contains(res.Stdout(), "BusyBox v1"))
 }
 
 func TestExecContainerdNixery(t *testing.T) {

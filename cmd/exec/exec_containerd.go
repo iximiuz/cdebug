@@ -112,7 +112,7 @@ func runDebuggerContainerd(ctx context.Context, cli cliutil.CLI, opts *options) 
 				oci.WithDefaultPathEnv,
 				oci.WithImageConfig(image), // May override the default $PATH.
 				oci.WithProcessArgs("sh", "-c", debuggerEntrypoint(
-					cli, runID, targetPID, opts.image, opts.cmd,
+					cli, runID, targetPID, opts.image, opts.cmd, opts.user,
 				)),
 				func() oci.SpecOpts {
 					if opts.tty {

@@ -11,7 +11,8 @@ import (
 )
 
 const (
-	ImageNginx = "docker.io/library/nginx:1.23"
+	ImageNginx             = "docker.io/library/nginx:1.25"
+	ImageNginxUnprivileged = "docker.io/nginxinc/nginx-unprivileged:1.25"
 
 	ContainerdCtrNamespace = "cdebug-test-ctr"
 	// TODO: ContainerdCRINamespace = "cdebug-test-cri"

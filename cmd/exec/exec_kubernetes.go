@@ -12,9 +12,6 @@ func runDebuggerKubernetes(ctx context.Context, cli cliutil.CLI, opts *options) 
 	if opts.autoRemove {
 		return fmt.Errorf("--rm flag is not supported for Kubernetes")
 	}
-	if opts.runtime != "" {
-		return fmt.Errorf("--runtime flag is not supported for Kubernetes")
-	}
 
 	return errors.New("not implemented")
 }

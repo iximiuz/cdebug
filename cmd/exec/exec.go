@@ -208,6 +208,18 @@ func debuggerName(name string, runID string) string {
 }
 
 var (
+	userEntrypoint = template.Must(template.New("user-entrypoint").Parse(`
+set -euo pipefail
+
+if [ "${HOME:-/}" != "/" ]; then
+	ln -s /proc/{{ .PID }}/root/ ${HOME}target-rootfs
+fi
+
+# TODO: Add target container's PATH to the user's PATH
+
+exec {{ .Cmd }}
+`))
+
 	chrootEntrypoint = template.Must(template.New("chroot-entrypoint").Parse(`
 set -euo pipefail
 
@@ -235,26 +247,43 @@ func debuggerEntrypoint(
 	targetPID int,
 	image string,
 	cmd []string,
+	user string,
 ) string {
+	if isRootUser(user) {
+		return mustRenderTemplate(
+			cli,
+			chrootEntrypoint,
+			map[string]any{
+				"ID":    runID,
+				"PID":   targetPID,
+				"IsNix": strings.Contains(image, "nixery"),
+				"Cmd": func() string {
+					if len(cmd) == 0 {
+						// bash provides a much better UX out of the box, so
+						// let's try to use bash if we know it's likely available.
+						if strings.HasPrefix(image, "nixery.dev") && strings.Contains(image, "/shell") {
+							return "bash"
+						}
+
+						// Default to sh otherwise.
+						return "sh"
+					}
+					return "sh -c '" + strings.Join(shellescape(cmd), " ") + "'"
+				}(),
+			},
+		)
+	}
+
 	return mustRenderTemplate(
 		cli,
-		chrootEntrypoint,
+		userEntrypoint,
 		map[string]any{
-			"ID":    runID,
-			"PID":   targetPID,
-			"IsNix": strings.Contains(image, "nixery"),
+			"PID": targetPID,
 			"Cmd": func() string {
 				if len(cmd) == 0 {
-					// bash provides a much better UX out of the box, so
-					// let's try to use bash if we know it's likely available.
-					if strings.HasPrefix(image, "nixery.dev") && strings.Contains(image, "/shell") {
-						return "bash"
-					}
-
-					// Default to sh otherwise.
 					return "sh"
 				}
-				return "sh -c '" + strings.Join(shellescape(cmd), " ") + "'"
+				return strings.Join(shellescape(cmd), " ")
 			}(),
 		},
 	)
@@ -278,4 +307,8 @@ func shellescape(args []string) (escaped []string) {
 		escaped = append(escaped, a)
 	}
 	return
+}
+
+func isRootUser(user string) bool {
+	return len(user) == 0 || user == "root" || user == "0" || user == "0:0"
 }

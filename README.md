@@ -14,12 +14,12 @@ With this tool you can:
 
 The following _commands_ x _runtimes_ are supported:
 
-|                       | Docker | Podman | containerd | Kubernetes | Kubernetes CRI | OCI (runc, crun)  |
-| :---                  | :---:  | :---:  | :---:      | :---:      | :---:          | :---:             |
-| `exec`                | ✅     | -      | ✅         | -          | -              | -                 |
-| `port-forward` local  | ✅     | -      | -          | -          | -              | -                 |
-| `port-forward` remote | 🛠️      | -      | -          | 🛠️          | -              | -                |
-| `export`              | -      | -      | -          | -          | -              | -                 |
+|                       | Docker | Podman | containerd | OCI (runc, crun) | Kubernetes | CRI    |
+| :---                  | :---:  | :---:  | :---:      | :---:            | :---:      | :---:  |
+| `exec`                | ✅     | -      | ✅         | -                | 🛠️          | -      |
+| `port-forward` local  | ✅     | -      | -          | -                | -          | -      |
+| `port-forward` remote | 🛠️      | -      | -          | -                | -          | -      |
+| `export`              | -      | -      | -          | -                | -          | -      |
 
 ## Installation
 

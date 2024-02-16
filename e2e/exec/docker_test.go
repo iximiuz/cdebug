@@ -34,6 +34,24 @@ func TestExecDockerHostNamespaces(t *testing.T) {
 	assert.Check(t, cmp.Contains(res.Stdout(), "debian"))
 }
 
+func TestExecDockerRunAsUser(t *testing.T) {
+	targetID, cleanup := fixture.DockerRunBackground(t, fixture.ImageNginxUnprivileged, nil)
+	defer cleanup()
+
+	res := icmd.RunCmd(
+		icmd.Command("cdebug", "exec", "--rm", "-q", "-u", "101:101", targetID, "id", "-u"),
+	)
+	res.Assert(t, icmd.Success)
+	assert.Equal(t, res.Stderr(), "")
+	assert.Check(t, cmp.Contains(res.Stdout(), "101"))
+
+	res = icmd.RunCmd(
+		icmd.Command("cdebug", "exec", "--rm", "-q", "-u", "101:101", targetID, "busybox"),
+	)
+	res.Assert(t, icmd.Success)
+	assert.Check(t, cmp.Contains(res.Stdout(), "BusyBox v1"))
+}
+
 func TestExecDockerNixery(t *testing.T) {
 	targetID, cleanup := fixture.DockerRunBackground(t, fixture.ImageNginx, nil)
 	defer cleanup()
