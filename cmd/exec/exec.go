@@ -9,6 +9,7 @@ import (
 	"strings"
 	"text/template"
 
+	"github.com/distribution/reference"
 	"github.com/spf13/cobra"
 
 	"github.com/iximiuz/cdebug/pkg/cliutil"
@@ -57,6 +58,9 @@ type options struct {
 	runtime   string
 	platform  string
 	namespace string
+
+	kubeconfig        string
+	kubeconfigContext string
 }
 
 func NewCommand(cli cliutil.CLI) *cobra.Command {
@@ -83,6 +87,9 @@ cdebug exec --namespace=my-ns --target=my-container k8s://my-pod
 `,
 		Args: cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if !opts.stdin {
+				opts.quiet = true
+			}
 			cli.SetQuiet(opts.quiet)
 
 			if err := cli.InputStream().CheckTty(opts.stdin, opts.tty); err != nil {
@@ -99,6 +106,17 @@ cdebug exec --namespace=my-ns --target=my-container k8s://my-pod
 				opts.target = opts.target[sep+3:]
 			} else {
 				opts.schema = schemaDocker
+			}
+
+			if !reference.ReferenceRegexp.MatchString(opts.image) {
+				return cliutil.WrapStatusError(
+					fmt.Errorf("invalid debugging toolkit image name %q: %v",
+						opts.image, reference.ErrReferenceInvalidFormat),
+				)
+			}
+
+			if opts.tty && !opts.stdin {
+				return cliutil.WrapStatusError(errors.New("the -t/--tty flag requires the -i/--stdin flag"))
 			}
 
 			ctx := context.Background()
@@ -196,6 +214,18 @@ cdebug exec --namespace=my-ns --target=my-container k8s://my-pod
 		"",
 		`Platform (e.g., linux/amd64, linux/arm64) of the target container (for some runtimes it's hard to detect it automatically, but the debug sidecar must be of the same platform as the target)`,
 	)
+	flags.StringVar(
+		&opts.kubeconfig,
+		"kubeconfig",
+		"",
+		`Path to the kubeconfig file (default is $HOME/.kube/config)`,
+	)
+	flags.StringVar(
+		&opts.kubeconfigContext,
+		"kubeconfig-context",
+		"",
+		`Name of the kubeconfig context to use`,
+	)
 
 	return cmd
 }
@@ -212,7 +242,7 @@ var (
 set -euo pipefail
 
 if [ "${HOME:-/}" != "/" ]; then
-	ln -s /proc/{{ .PID }}/root/ ${HOME}target-rootfs
+	ln -s /proc/{{ .TARGET_PID }}/root/ ${HOME}target-rootfs
 fi
 
 # TODO: Add target container's PATH to the user's PATH
@@ -223,18 +253,24 @@ exec {{ .Cmd }}
 	chrootEntrypoint = template.Must(template.New("chroot-entrypoint").Parse(`
 set -euo pipefail
 
+CURRENT_PID=$(sh -c 'echo $PPID')
+
 {{ if .IsNix }}
-rm -rf /proc/{{ .PID }}/root/nix
-ln -s /proc/$$/root/nix /proc/{{ .PID }}/root/nix
+CURRENT_NIX_INODE=$(stat -c '%i' /nix)
+TARGET_NIX_INODE=$(stat -c '%i' /proc/{{ .TARGET_PID }}/root/nix 2>/dev/null || echo 0)
+if [ ${CURRENT_NIX_INODE} -ne ${TARGET_NIX_INODE} ]; then
+  rm -rf /proc/{{ .TARGET_PID }}/root/nix
+  ln -s /proc/${CURRENT_PID}/root/nix /proc/{{ .TARGET_PID }}/root/nix
+fi
 {{ end }}
 
-ln -s /proc/$$/root/bin/ /proc/{{ .PID }}/root/.cdebug-{{ .ID }}
+ln -s /proc/${CURRENT_PID}/root/bin/ /proc/{{ .TARGET_PID }}/root/.cdebug-{{ .ID }}
 
 cat > /.cdebug-entrypoint.sh <<EOF
 #!/bin/sh
 export PATH=$PATH:/.cdebug-{{ .ID }}
 
-chroot /proc/{{ .PID }}/root {{ .Cmd }}
+chroot /proc/{{ .TARGET_PID }}/root {{ .Cmd }}
 EOF
 
 exec sh /.cdebug-entrypoint.sh
@@ -254,19 +290,12 @@ func debuggerEntrypoint(
 			cli,
 			chrootEntrypoint,
 			map[string]any{
-				"ID":    runID,
-				"PID":   targetPID,
-				"IsNix": strings.Contains(image, "nixery"),
+				"ID":         runID,
+				"TARGET_PID": targetPID,
+				"IsNix":      strings.Contains(image, "nixery"),
 				"Cmd": func() string {
 					if len(cmd) == 0 {
-						// bash provides a much better UX out of the box, so
-						// let's try to use bash if we know it's likely available.
-						if strings.HasPrefix(image, "nixery.dev") && strings.Contains(image, "/shell") {
-							return "bash"
-						}
-
-						// Default to sh otherwise.
-						return "sh"
+						return ""
 					}
 					return "sh -c '" + strings.Join(shellescape(cmd), " ") + "'"
 				}(),

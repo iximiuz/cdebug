@@ -7,10 +7,11 @@ import (
 	"time"
 
 	"github.com/docker/cli/cli/streams"
-	"github.com/docker/docker/api/types"
+	"github.com/docker/docker/api/types/container"
 	dockerclient "github.com/docker/docker/client"
 	mobysignal "github.com/moby/sys/signal"
 	"github.com/sirupsen/logrus"
+	"k8s.io/client-go/tools/remotecommand"
 )
 
 func StartResizing(
@@ -49,10 +50,41 @@ func resize(
 		return nil
 	}
 
-	if err := client.ContainerResize(ctx, contID, types.ResizeOptions{Height: height, Width: width}); err != nil {
+	if err := client.ContainerResize(ctx, contID, container.ResizeOptions{Height: height, Width: width}); err != nil {
 		logrus.WithError(err).Debug("TTY resize error")
 		return err
 	}
 
 	return nil
+}
+
+type ResizeQueue struct {
+	ctx context.Context
+	out *streams.Out
+	ch  chan os.Signal
+}
+
+var _ remotecommand.TerminalSizeQueue = &ResizeQueue{}
+
+func NewResizeQueue(ctx context.Context, out *streams.Out) *ResizeQueue {
+	return &ResizeQueue{
+		ctx: ctx,
+		out: out,
+		ch:  make(chan os.Signal, 100),
+	}
+}
+
+func (r *ResizeQueue) Start() {
+	signal.Notify(r.ch, mobysignal.SIGWINCH)
+	r.ch <- mobysignal.SIGWINCH // send a dummy signal to trigger the first resize
+}
+
+func (r *ResizeQueue) Next() *remotecommand.TerminalSize {
+	<-r.ch
+
+	height, width := r.out.GetTtySize()
+	return &remotecommand.TerminalSize{
+		Height: uint16(height),
+		Width:  uint16(width),
+	}
 }

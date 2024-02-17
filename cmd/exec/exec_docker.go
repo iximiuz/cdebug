@@ -97,7 +97,7 @@ func runDebuggerDocker(ctx context.Context, cli cliutil.CLI, opts *options) erro
 	}
 	defer close()
 
-	if err := client.ContainerStart(ctx, resp.ID, types.ContainerStartOptions{}); err != nil {
+	if err := client.ContainerStart(ctx, resp.ID, container.StartOptions{}); err != nil {
 		return fmt.Errorf("cannot start debugger container: %w", err)
 	}
 
