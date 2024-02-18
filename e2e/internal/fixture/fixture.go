@@ -2,8 +2,6 @@ package fixture
 
 import (
 	"os/exec"
-	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 
@@ -91,28 +89,30 @@ func DockerRunBackground(
 	return contID, cleanup
 }
 
-func DockerBuildLocalImage(
+func DockerImageBuild(
 	t *testing.T,
+	name string,
 ) (string, func()) {
-	localImage := "thisimageonlyexistslocally:1.0"
+	cmd := dockerCmd("build", "-t", name, "-")
 
-	// Get dirname of current file, assumes that the Dockerfile lives next to this file.
-	_, filename, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatalf("Failed to get filename")
-	}
-	dirname := filepath.Dir(filename)
-
-	cmd := dockerCmd("build", "-t", localImage, dirname)
-
-	res := icmd.RunCmd(cmd)
+	res := icmd.RunCmd(cmd, icmd.WithStdin(strings.NewReader("FROM busybox:musl\n")))
 	res.Assert(t, icmd.Success)
 
 	cleanup := func() {
-		icmd.RunCmd(dockerCmd("rmi", localImage)).Assert(t, icmd.Success)
+		icmd.RunCmd(dockerCmd("rmi", name)).Assert(t, icmd.Success)
 	}
 
-	return localImage, cleanup
+	return name, cleanup
+}
+
+func DockerImageRemove(
+	t *testing.T,
+	name string,
+) {
+	res := icmd.RunCmd(dockerCmd("rmi", name))
+	if !strings.Contains(res.Stderr(), "No such image") {
+		res.Assert(t, icmd.Success)
+	}
 }
 
 func NerdctlRunBackground(

@@ -1,8 +1,7 @@
 package exec
 
 import (
-	"fmt"
-	"regexp"
+	"strings"
 	"testing"
 
 	"gotest.tools/assert"
@@ -21,27 +20,6 @@ func TestExecDockerSimple(t *testing.T) {
 	)
 	res.Assert(t, icmd.Success)
 	assert.Check(t, cmp.Contains(res.Stdout(), "debian"))
-}
-
-func TestExecDockerUseLocalImage(t *testing.T) {
-	localImage, cleanupLocalImage := fixture.DockerBuildLocalImage(t)
-	defer cleanupLocalImage()
-
-	targetImageID, targetImageCleanup := fixture.DockerRunBackground(t, fixture.ImageNginx, nil)
-	defer targetImageCleanup()
-
-	res := icmd.RunCmd(
-		icmd.Command("cdebug", "--image", localImage, "-l=debug", "exec", "--rm", "-q", targetImageID, "cat", "/etc/os-release"),
-	)
-	res.Assert(t, icmd.Success)
-	assert.Check(t, cmp.Contains(res.Stdout(), "debian"))
-	assert.Assert(t, func() cmp.Result {
-		re := regexp.MustCompile("Pulling debugger image...")
-		if re.MatchString(res.Stdout()) {
-			return cmp.ResultFailure(fmt.Sprintf("Image %s shouldn't be pulled because it only exists locally", localImage))
-		}
-		return cmp.ResultSuccess
-	})
 }
 
 func TestExecDockerHostNamespaces(t *testing.T) {
@@ -89,4 +67,29 @@ func TestExecDockerNixery(t *testing.T) {
 	)
 	res.Assert(t, icmd.Success)
 	assert.Check(t, cmp.Contains(res.Stdout(), "VIM - Vi IMproved"))
+}
+
+func TestExecDockerUseLocalImage(t *testing.T) {
+	targetID, targetCleanup := fixture.DockerRunBackground(t, fixture.ImageNginx, nil)
+	defer targetCleanup()
+
+	remoteImage := "busybox:musl"
+	fixture.DockerImageRemove(t, remoteImage)
+
+	res := icmd.RunCmd(
+		icmd.Command("cdebug", "exec", "--rm", "-i", "--image", remoteImage, targetID, "cat", "/etc/os-release"),
+	)
+	res.Assert(t, icmd.Success)
+	assert.Check(t, cmp.Contains(res.Stdout(), "debian"))
+	assert.Check(t, cmp.Contains(res.Stderr(), "Pulling debugger image..."))
+
+	localImage, imageCleanup := fixture.DockerImageBuild(t, "thisimageonlyexistslocally:1.0")
+	defer imageCleanup()
+
+	res = icmd.RunCmd(
+		icmd.Command("cdebug", "exec", "--rm", "-i", "--image", localImage, targetID, "cat", "/etc/os-release"),
+	)
+	res.Assert(t, icmd.Success)
+	assert.Check(t, cmp.Contains(res.Stdout(), "debian"))
+	assert.Equal(t, strings.Contains(res.Stderr(), "Pulling debugger image..."), false)
 }
