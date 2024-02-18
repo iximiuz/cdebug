@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -36,6 +37,9 @@ import (
 func runDebuggerKubernetes(ctx context.Context, cli cliutil.CLI, opts *options) error {
 	if opts.autoRemove {
 		return fmt.Errorf("--rm flag is not supported for Kubernetes")
+	}
+	if err := validateUserFlag(opts.user); err != nil {
+		return err
 	}
 
 	config, namespace, err := ckubernetes.GetRESTConfig(
@@ -171,13 +175,20 @@ func withDebugContainer(
 ) *corev1.Pod {
 	ec := &corev1.EphemeralContainer{
 		EphemeralContainerCommon: corev1.EphemeralContainerCommon{
-			Name: debuggerName,
-			// Env:                   o.Env,
-			Image:                    opts.image,
-			ImagePullPolicy:          corev1.PullIfNotPresent,
-			Command:                  []string{"sh", "-c", entrypoint},
-			Stdin:                    opts.stdin,
-			TTY:                      opts.tty,
+			Name:            debuggerName,
+			Image:           opts.image,
+			ImagePullPolicy: corev1.PullIfNotPresent,
+			Command:         []string{"sh", "-c", entrypoint},
+			Stdin:           opts.stdin,
+			TTY:             opts.tty,
+			// Env:                   TODO...
+			// VolumeMounts:          TODO...
+			// VolumeDevices: 			  TODO...
+			SecurityContext: &corev1.SecurityContext{
+				Privileged: &opts.privileged,
+				RunAsUser:  uidPtr(opts.user),
+				RunAsGroup: gidPtr(opts.user),
+			},
 			TerminationMessagePolicy: corev1.TerminationMessageReadFile,
 		},
 		TargetContainerName: targetName,
@@ -424,4 +435,72 @@ func containerStatusByName(pod *corev1.Pod, containerName string) *corev1.Contai
 		}
 	}
 	return nil
+}
+
+// Allowed values:
+//
+//	<empty> - use the user specified in the toolkit image
+//	<uid> - use the user with the specified UID (GID defaults to UID)
+//	<uid>:<gid> - use the user with the specified UID and GID
+func validateUserFlag(user string) error {
+	user = strings.TrimSpace(user)
+
+	if user == "" {
+		return nil
+	}
+
+	var (
+		parts = strings.Split(user, ":")
+		uid   string
+		gid   string
+	)
+
+	switch len(parts) {
+	case 1:
+		uid = parts[0]
+		gid = uid
+
+	case 2:
+		uid = parts[0]
+		gid = parts[1]
+
+	default:
+		return fmt.Errorf("invalid user flag: %q", user)
+	}
+
+	_, err := strconv.ParseUint(uid, 10, 32)
+	if err != nil {
+		return fmt.Errorf("invalid UID: %q", uid)
+	}
+
+	_, err = strconv.ParseUint(gid, 10, 32)
+	if err != nil {
+		return fmt.Errorf("invalid GID: %q", gid)
+	}
+
+	return nil
+}
+
+func uidPtr(user string) *int64 {
+	if user == "" {
+		return nil
+	}
+
+	parts := strings.Split(user, ":")
+	uid, _ := strconv.ParseInt(parts[0], 10, 32)
+	return &uid
+}
+
+func gidPtr(user string) *int64 {
+	if user == "" {
+		return nil
+	}
+
+	if !strings.Contains(user, ":") {
+		return uidPtr(user)
+	}
+
+	parts := strings.Split(user, ":")
+	gid, _ := strconv.ParseInt(parts[1], 10, 32)
+	return &gid
 }
