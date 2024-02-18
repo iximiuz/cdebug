@@ -31,7 +31,7 @@ const (
 	exampleText = `
   # Start a %s shell in the Docker container:
   cdebug exec -it mycontainer
-  cdebug exec -it docker://my-container
+  cdebug exec -it docker://mycontainer
 
   # Execute a command in the Docker container:
   cdebug exec mycontainer cat /etc/os-release

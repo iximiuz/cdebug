@@ -55,9 +55,9 @@ At the moment, the following systems are (kinda sorta) supported:
 Execute commands or start interactive shells in scratch, slim, or distroless containers, with ease:
 
 ```sh
-# Start a %s shell in the Docker container:
+# Start a busybox:musl shell in the Docker container:
 cdebug exec -it mycontainer
-cdebug exec -it docker://my-container
+cdebug exec -it docker://mycontainer
 
 # Execute a command in the Docker container:
 cdebug exec mycontainer cat /etc/os-release
@@ -81,7 +81,7 @@ cdebug exec -it k8s://mypod
 cdebug exec --namespace=myns -it pod/mypod
 
 # Start a shell in a Kubernetes pod's container:
-cdebug exec -it pod/mypod/mycontainer`
+cdebug exec -it pod/mypod/mycontainer
 ```
 
 The `cdebug exec` command is a crossbreeding of `docker exec` and `kubectl debug` commands.
