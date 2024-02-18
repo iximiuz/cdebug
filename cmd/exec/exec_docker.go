@@ -58,7 +58,7 @@ func runDebuggerDocker(ctx context.Context, cli cliutil.CLI, opts *options) erro
 			Image:      opts.image,
 			Entrypoint: []string{"sh"},
 			Cmd: []string{"-c", debuggerEntrypoint(
-				cli, runID, targetPID, opts.image, opts.cmd, opts.user,
+				cli, runID, targetPID, opts.image, opts.cmd, isRootUser(opts.user),
 			)},
 			Tty:          opts.tty,
 			OpenStdin:    opts.stdin,

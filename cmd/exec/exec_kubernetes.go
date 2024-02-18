@@ -89,14 +89,17 @@ func runDebuggerKubernetes(ctx context.Context, cli cliutil.CLI, opts *options) 
 	cli.PrintAux("Debugger container name: %s\n", debuggerName)
 
 	cli.PrintAux("Starting debugger container...\n")
+
+	useChroot := isRootUser(opts.user) && !isReadOnlyRootFS(pod, targetName) && !runsAsNonRoot(pod, targetName)
 	if err := runPodDebugger(
 		ctx,
+		cli,
 		opts,
 		client,
 		pod,
 		targetName,
 		debuggerName,
-		debuggerEntrypoint(cli, runID, 1, opts.image, opts.cmd, opts.user),
+		debuggerEntrypoint(cli, runID, 1, opts.image, opts.cmd, useChroot),
 	); err != nil {
 		return fmt.Errorf("error adding debugger container: %v", err)
 	}
@@ -115,6 +118,7 @@ func runDebuggerKubernetes(ctx context.Context, cli cliutil.CLI, opts *options) 
 
 func runPodDebugger(
 	ctx context.Context,
+	cli cliutil.CLI,
 	opts *options,
 	client kubernetes.Interface,
 	pod *corev1.Pod,
@@ -127,7 +131,7 @@ func runPodDebugger(
 		return fmt.Errorf("error creating JSON for pod: %v", err)
 	}
 
-	debugPod := withDebugContainer(pod, opts, targetName, debuggerName, entrypoint)
+	debugPod := withDebugContainer(cli, pod, opts, targetName, debuggerName, entrypoint)
 	if err != nil {
 		return err
 	}
@@ -167,6 +171,7 @@ func runPodDebugger(
 }
 
 func withDebugContainer(
+	cli cliutil.CLI,
 	pod *corev1.Pod,
 	opts *options,
 	targetName string,
@@ -193,17 +198,24 @@ func withDebugContainer(
 		TargetContainerName: targetName,
 	}
 
-	if !isRootUser(opts.user) && targetName != "" {
+	if runsAsNonRoot(pod, targetName) && isRootUser(opts.user) {
+		ec.SecurityContext.RunAsNonRoot = ptr(true)
+		ec.SecurityContext.RunAsUser = preferredUID(pod, targetName)
+		ec.SecurityContext.RunAsGroup = preferredGID(pod, targetName)
+
+		cli.PrintAux("The target mandates non-root user, using %d:%d for the debugger container.\n",
+			*ec.SecurityContext.RunAsUser, *ec.SecurityContext.RunAsGroup)
+	}
+
+	target := containerByName(pod, targetName)
+	if target != nil && !isRootUser(opts.user) {
 		// Copying volume mounts from the target container for convenience.
 		// No need to copy for root user because for it, the rootfs will
 		// look identical to the target container's.
 
-		target := containerByName(pod, targetName)
-		if target != nil {
-			for _, vm := range target.VolumeMounts {
-				if vm.SubPath == "" { // Subpath mounts are not allowed for ephemeral containers.
-					ec.VolumeMounts = append(ec.VolumeMounts, vm)
-				}
+		for _, vm := range target.VolumeMounts {
+			if vm.SubPath == "" { // Subpath mounts are not allowed for ephemeral containers.
+				ec.VolumeMounts = append(ec.VolumeMounts, vm)
 			}
 		}
 	}
@@ -427,6 +439,50 @@ func dumpDebuggerLogs(
 			return nil
 		}
 	}
+}
+
+func isReadOnlyRootFS(pod *corev1.Pod, containerName string) bool {
+	c := containerByName(pod, containerName)
+	return c != nil &&
+		c.SecurityContext != nil &&
+		c.SecurityContext.ReadOnlyRootFilesystem != nil &&
+		*c.SecurityContext.ReadOnlyRootFilesystem
+}
+
+func runsAsNonRoot(pod *corev1.Pod, containerName string) bool {
+	// Container security context takes precedence over pod security context.
+	c := containerByName(pod, containerName)
+	if c != nil && c.SecurityContext != nil && c.SecurityContext.RunAsNonRoot != nil && *c.SecurityContext.RunAsNonRoot {
+		return true
+	}
+
+	return pod.Spec.SecurityContext != nil && pod.Spec.SecurityContext.RunAsNonRoot != nil && *pod.Spec.SecurityContext.RunAsNonRoot
+}
+
+func preferredUID(pod *corev1.Pod, containerName string) *int64 {
+	c := containerByName(pod, containerName)
+	if c != nil && c.SecurityContext != nil && c.SecurityContext.RunAsUser != nil {
+		return c.SecurityContext.RunAsUser
+	}
+
+	if pod.Spec.SecurityContext != nil && pod.Spec.SecurityContext.RunAsUser != nil {
+		return pod.Spec.SecurityContext.RunAsUser
+	}
+
+	return ptr(int64(1000))
+}
+
+func preferredGID(pod *corev1.Pod, containerName string) *int64 {
+	c := containerByName(pod, containerName)
+	if c != nil && c.SecurityContext != nil && c.SecurityContext.RunAsGroup != nil {
+		return c.SecurityContext.RunAsGroup
+	}
+
+	if pod.Spec.SecurityContext != nil && pod.Spec.SecurityContext.RunAsGroup != nil {
+		return pod.Spec.SecurityContext.RunAsGroup
+	}
+
+	return ptr(int64(1000))
 }
 
 func containerStatusByName(pod *corev1.Pod, containerName string) *corev1.ContainerStatus {

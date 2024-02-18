@@ -254,7 +254,7 @@ func debuggerName(name string, runID string) string {
 }
 
 var (
-	userEntrypoint = template.Must(template.New("user-entrypoint").Parse(`
+	simpleEntrypoint = template.Must(template.New("user-entrypoint").Parse(`
 set -euo pipefail
 
 if [ "${HOME:-/}" != "/" ]; then
@@ -299,9 +299,9 @@ func debuggerEntrypoint(
 	targetPID int,
 	image string,
 	cmd []string,
-	user string,
+	chroot bool,
 ) string {
-	if isRootUser(user) {
+	if chroot {
 		return mustRenderTemplate(
 			cli,
 			chrootEntrypoint,
@@ -321,7 +321,7 @@ func debuggerEntrypoint(
 
 	return mustRenderTemplate(
 		cli,
-		userEntrypoint,
+		simpleEntrypoint,
 		map[string]any{
 			"PID": targetPID,
 			"Cmd": func() string {
