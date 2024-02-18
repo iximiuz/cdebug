@@ -182,7 +182,6 @@ func withDebugContainer(
 			Stdin:           opts.stdin,
 			TTY:             opts.tty,
 			// Env:                   TODO...
-			// VolumeMounts:          TODO...
 			// VolumeDevices: 			  TODO...
 			SecurityContext: &corev1.SecurityContext{
 				Privileged: &opts.privileged,
@@ -193,6 +192,24 @@ func withDebugContainer(
 		},
 		TargetContainerName: targetName,
 	}
+
+	if !isRootUser(opts.user) && targetName != "" {
+		// Copying volume mounts from the target container for convenience.
+		// No need to copy for root user because for it, the rootfs will
+		// look identical to the target container's.
+
+		target := containerByName(pod, targetName)
+		if target != nil {
+			for _, vm := range target.VolumeMounts {
+				if vm.SubPath == "" { // Subpath mounts are not allowed for ephemeral containers.
+					ec.VolumeMounts = append(ec.VolumeMounts, vm)
+				}
+			}
+		}
+	}
+
+	// TODO: Consider mounting all volumes if the target container is not specified.
+	//       Beware of potential path collisions.
 
 	copied := pod.DeepCopy()
 	copied.Spec.EphemeralContainers = append(copied.Spec.EphemeralContainers, *ec)
@@ -412,15 +429,6 @@ func dumpDebuggerLogs(
 	}
 }
 
-func ephemeralContainerByName(pod *corev1.Pod, containerName string) *corev1.EphemeralContainer {
-	for i := range pod.Spec.EphemeralContainers {
-		if pod.Spec.EphemeralContainers[i].Name == containerName {
-			return &pod.Spec.EphemeralContainers[i]
-		}
-	}
-	return nil
-}
-
 func containerStatusByName(pod *corev1.Pod, containerName string) *corev1.ContainerStatus {
 	allContainerStatus := [][]corev1.ContainerStatus{
 		pod.Status.InitContainerStatuses,
@@ -432,6 +440,24 @@ func containerStatusByName(pod *corev1.Pod, containerName string) *corev1.Contai
 			if statuses[i].Name == containerName {
 				return &statuses[i]
 			}
+		}
+	}
+	return nil
+}
+
+func containerByName(pod *corev1.Pod, containerName string) *corev1.Container {
+	for i := range pod.Spec.Containers {
+		if pod.Spec.Containers[i].Name == containerName {
+			return &pod.Spec.Containers[i]
+		}
+	}
+	return nil
+}
+
+func ephemeralContainerByName(pod *corev1.Pod, containerName string) *corev1.EphemeralContainer {
+	for i := range pod.Spec.EphemeralContainers {
+		if pod.Spec.EphemeralContainers[i].Name == containerName {
+			return &pod.Spec.EphemeralContainers[i]
 		}
 	}
 	return nil
