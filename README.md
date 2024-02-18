@@ -6,17 +6,17 @@
 
 With this tool you can:
 
-- Troubleshoot containers lacking shell and/or debugging tools
-- Forward unpublished or even localhost ports to your host system
-- Expose endpoints from the host system to containers & Kubernetes networks
-- Handily export image's and/or container's filesystem to local folders
+- Troubleshoot containers and pods lacking shell and/or debugging tools.
+- Forward unpublished or even localhost ports to your host system.
+- Expose endpoints from the host system to containers & Kubernetes networks.
+- Handily export image's and/or container's filesystem to local folders.
 - and more :)
 
 The following _commands_ x _runtimes_ are supported:
 
 |                       | Docker | Podman | containerd | OCI (runc, crun) | Kubernetes | CRI    |
 | :---                  | :---:  | :---:  | :---:      | :---:            | :---:      | :---:  |
-| `exec`                | ✅     | -      | ✅         | -                | 🛠️          | -      |
+| `exec`                | ✅     | -      | ✅         | -                | ✅          | -      |
 | `port-forward` local  | ✅     | -      | -          | -                | -          | -      |
 | `port-forward` remote | 🛠️      | -      | -          | -                | -          | -      |
 | `export`              | -      | -      | -          | -                | -          | -      |
@@ -52,10 +52,36 @@ At the moment, the following systems are (kinda sorta) supported:
 
 ### cdebug exec
 
-Run an interactive shell in a scratch, slim, or distroless container, with ease:
+Execute commands or start interactive shells in scratch, slim, or distroless containers, with ease:
 
 ```sh
-cdebug exec -it [docker|containerd://]<container>
+# Start a %s shell in the Docker container:
+cdebug exec -it mycontainer
+cdebug exec -it docker://my-container
+
+# Execute a command in the Docker container:
+cdebug exec mycontainer cat /etc/os-release
+
+# Use a different debugging toolkit image:
+cdebug exec -it --image=alpine mycontainer
+
+# Use a nixery.dev image (https://nixery.dev/):
+cdebug exec -it --image=nixery.dev/shell/vim/ps/tshark mycontainer
+
+# Exec into a containerd container:
+cdebug exec -it containerd://mycontainer ...
+cdebug exec --namespace myns -it containerd://mycontainer ...
+
+# Exec into a nerdctl container:
+cdebug exec -it nerdctl://mycontainer ...
+
+# Start a shell in a Kubernetes pod:
+cdebug exec -it pod/mypod
+cdebug exec -it k8s://mypod
+cdebug exec --namespace=myns -it pod/mypod
+
+# Start a shell in a Kubernetes pod's container:
+cdebug exec -it pod/mypod/mycontainer`
 ```
 
 The `cdebug exec` command is a crossbreeding of `docker exec` and `kubectl debug` commands.
@@ -265,7 +291,67 @@ Or run a debugging session in the above container using the `containerd://` sche
 $ sudo cdebug exec -it --rm containerd://9f876
 ```
 
-### Debugging Kubernetes Pods (node access is assumed)
+### Debugging Kubernetes Pods (without node access)
+
+Start the target Pod:
+
+```sh
+$ kubectl run --image nginx:alpine nginx-1
+$ kubectl run --image=nginx:alpine nginx-1 \
+  --overrides='{ "apiVersion": "v1", "spec": { "containers": [{ "name": "app", "image": "nginx:alpine" }] } }'
+pod/nginx-1 created
+
+$ kubectl get pods
+NAME    READY   STATUS    RESTARTS   AGE
+nginx-1   1/1     Running   0         5s
+```
+
+Run the debugger in the Pod (it'll start a new ephemeral container):
+
+```sh
+$ cdebug exec -it pod/nginx-1
+```
+
+Expected output:
+
+```text
+Debugger container name: cdebug-3023d11d
+Starting debugger container...
+Waiting for debugger container...
+Attaching to debugger container...
+If you don't see a command prompt, try pressing enter.
+/ # ps auxf
+PID   USER     TIME  COMMAND
+    1 root      0:00 sh /.cdebug-entrypoint.sh
+   10 root      0:00 /bin/sh -i
+   11 root      0:00 ps auxf
+```
+
+Run the debugger in the Nginx container (`app`):
+
+```sh
+$ cdebug exec -it pod/nginx-1/app
+```
+
+```text
+cdebug exec -it pod/nginx-1/app
+Debugger container name: cdebug-b44ca485
+Starting debugger container...
+Waiting for debugger container...
+Attaching to debugger container...
+If you don't see a command prompt, try pressing enter.
+/ # ps auxf
+PID   USER     TIME  COMMAND
+    1 root      0:00 nginx: master process nginx -g daemon off;
+   30 nginx     0:00 nginx: worker process
+   ...
+   41 nginx     0:00 nginx: worker process
+   42 root      0:00 sh /.cdebug-entrypoint.sh
+   51 root      0:00 /bin/ash -i
+   52 root      0:00 ps auxf
+```
+
+### Debugging Kubernetes Pods (with node access)
 
 Currently, only containerd CRI is supported. First, you'll need to list the running
 containers:
@@ -333,7 +419,8 @@ $ curl localhost:49176
 **Q:** Running `cdebug exec` fails with `rm: cannot remove '/proc/1/root/nix': Permission denied` or
 `ln: /proc/1/root/.cdebug-XXXXXXXX: Permission denied`.
 
-Chances are your target container has been started with elevated permissions while you're trying to run a non-privileged debugger sidecar. Try `cdebug exec --privileged` instead.
+Chances are your target container has been started with elevated permissions while you're trying to run a non-privileged debugger sidecar.
+Try `cdebug exec --privileged` instead.
 
 ## Similar tools
 
@@ -348,7 +435,7 @@ Chances are your target container has been started with elevated permissions whi
 
 - More `exec` flags (like in `docker run`): `--cap-add`, `--cap-drop`, `--env`, `--volume`, etc.
 - Helper command(s) suggesting nix(ery) packages
-- Non-docker runtimes (containerd, runc, k8s)
+- Non-docker runtimes (Podman, CRI, OCI)
 - More E2E Tests
 
 ## Contributions

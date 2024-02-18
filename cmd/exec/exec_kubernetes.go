@@ -38,7 +38,11 @@ func runDebuggerKubernetes(ctx context.Context, cli cliutil.CLI, opts *options) 
 		return fmt.Errorf("--rm flag is not supported for Kubernetes")
 	}
 
-	config, namespace, err := ckubernetes.GetRESTConfig(opts.kubeconfig, opts.kubeconfigContext)
+	config, namespace, err := ckubernetes.GetRESTConfig(
+		opts.runtime,
+		opts.kubeconfig,
+		opts.kubeconfigContext,
+	)
 	if err != nil {
 		return fmt.Errorf("error getting Kubernetes REST config: %v", err)
 	}
@@ -247,7 +251,7 @@ func attachPodDebugger(
 	podName string,
 	debuggerName string,
 ) error {
-	cli.PrintAux("Waiting for debugger container to start...\n")
+	cli.PrintAux("Waiting for debugger container...\n")
 	pod, err := waitForContainer(ctx, client, ns, podName, debuggerName, true)
 	if err != nil {
 		return fmt.Errorf("error waiting for debugger container: %v", err)

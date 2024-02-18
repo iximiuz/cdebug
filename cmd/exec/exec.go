@@ -26,6 +26,35 @@ const (
 	schemaNerdctl    = "nerdctl://"
 	schemaPodman     = "podman://"
 	schemaOCI        = "oci://" // runc, crun, etc.
+
+	exampleText = `
+  # Start a %s shell in the Docker container:
+  cdebug exec -it mycontainer
+  cdebug exec -it docker://my-container
+
+  # Execute a command in the Docker container:
+  cdebug exec mycontainer cat /etc/os-release
+
+  # Use a different debugging toolkit image:
+  cdebug exec -it --image=alpine mycontainer
+
+  # Use a nixery.dev image (https://nixery.dev/):
+  cdebug exec -it --image=nixery.dev/shell/vim/ps/tshark mycontainer
+
+  # Exec into a containerd container:
+  cdebug exec -it containerd://mycontainer ...
+  cdebug exec --namespace myns -it containerd://mycontainer ...
+
+  # Exec into a nerdctl container:
+  cdebug exec -it nerdctl://mycontainer ...
+
+  # Start a shell in a Kubernetes pod:
+  cdebug exec -it pod/mypod
+  cdebug exec -it k8s://mypod
+  cdebug exec --namespace=myns -it pod/mypod
+
+  # Start a shell in a Kubernetes pod's container:
+  cdebug exec -it pod/mypod/mycontainer`
 )
 
 var (
@@ -67,25 +96,10 @@ func NewCommand(cli cliutil.CLI) *cobra.Command {
 	var opts options
 
 	cmd := &cobra.Command{
-		Use:   "exec [OPTIONS] [schema://]CONTAINER [COMMAND] [ARG...]",
-		Short: "Start a debugger shell in the target container, Pod, Node.",
-		Example: `# Docker:
-cdebug exec my-container
-cdebug exec docker://my-container
-cdebug exec docker://my-container cat /etc/os-release
-cdebug exec --image=busybox:musl my-container
-
-# containerd & nerdctl:
-cdebug exec containerd://my-container cat /etc/os-release
-cdebug exec nerdctl://my-container cat /etc/os-release
-
-# Kubernetes (coming soon):
-cdebug exec k8s://my-pod
-cdebug exec kubernetes://my-pod
-cdebug exec k8s://my-pod/my-container
-cdebug exec --namespace=my-ns --target=my-container k8s://my-pod
-`,
-		Args: cobra.MinimumNArgs(1),
+		Use:     "exec [OPTIONS] [schema://][POD][CONTAINER] [COMMAND] [ARG...]",
+		Short:   "Start a debugger shell in the target container or pod.",
+		Example: fmt.Sprintf(exampleText[1:], strings.TrimPrefix(defaultToolkitImage, "docker.io/library/")),
+		Args:    cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if !opts.stdin {
 				opts.quiet = true
@@ -104,6 +118,8 @@ cdebug exec --namespace=my-ns --target=my-container k8s://my-pod
 			if sep := strings.Index(opts.target, "://"); sep != -1 {
 				opts.schema = opts.target[:sep+3]
 				opts.target = opts.target[sep+3:]
+			} else if strings.HasPrefix(opts.target, "pod/") || strings.HasPrefix(opts.target, "pods/") {
+				opts.schema = schemaKubeLong
 			} else {
 				opts.schema = schemaDocker
 			}
