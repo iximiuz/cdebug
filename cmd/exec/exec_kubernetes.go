@@ -131,7 +131,7 @@ func runPodDebugger(
 		return fmt.Errorf("error creating JSON for pod: %v", err)
 	}
 
-	debugPod := withDebugContainer(cli, pod, opts, targetName, debuggerName, entrypoint)
+	debugPod, err := withDebugContainer(cli, pod, opts, targetName, debuggerName, entrypoint)
 	if err != nil {
 		return err
 	}
@@ -177,7 +177,7 @@ func withDebugContainer(
 	targetName string,
 	debuggerName string,
 	entrypoint string,
-) *corev1.Pod {
+) (*corev1.Pod, error) {
 	ec := &corev1.EphemeralContainer{
 		EphemeralContainerCommon: corev1.EphemeralContainerCommon{
 			Name:            debuggerName,
@@ -223,10 +223,18 @@ func withDebugContainer(
 	// TODO: Consider mounting all volumes if the target container is not specified.
 	//       Beware of potential path collisions.
 
+	if opts.override != "" {
+		var err error
+		ec, err = ckubernetes.Override(ec, opts.override, opts.overrideType)
+		if err != nil {
+			return nil, fmt.Errorf("error overriding container: %v", err)
+		}
+	}
+
 	copied := pod.DeepCopy()
 	copied.Spec.EphemeralContainers = append(copied.Spec.EphemeralContainers, *ec)
 
-	return copied
+	return copied, nil
 }
 
 func waitForContainer(

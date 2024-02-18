@@ -13,6 +13,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/iximiuz/cdebug/pkg/cliutil"
+	"github.com/iximiuz/cdebug/pkg/kubernetes"
 )
 
 const (
@@ -90,6 +91,9 @@ type options struct {
 
 	kubeconfig        string
 	kubeconfigContext string
+
+	override     string
+	overrideType kubernetes.OverrideType
 }
 
 func NewCommand(cli cliutil.CLI) *cobra.Command {
@@ -241,6 +245,20 @@ func NewCommand(cli cliutil.CLI) *cobra.Command {
 		"kubeconfig-context",
 		"",
 		`Name of the kubeconfig context to use`,
+	)
+	flags.StringVar(
+		&opts.override,
+		"override",
+		"",
+		`[Kubernetes only] An inline JSON override for the generated ephemeral container object. Example: '{ "env": [{ "name": "DEBUG", "value": "1" }] }'`,
+	)
+	flags.StringVar(
+		(*string)(&opts.overrideType),
+		"override-type",
+		string(kubernetes.DefaultOverrideType),
+		fmt.Sprintf(`[Kubernetes only] The method used to override the generated ephemeral container object: %s, %s, or %s.`,
+			kubernetes.OverrideTypeJSON, kubernetes.OverrideTypeMerge, kubernetes.OverrideTypeStrategic,
+		),
 	)
 
 	return cmd
