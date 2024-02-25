@@ -11,7 +11,7 @@ import (
 	"github.com/iximiuz/cdebug/e2e/internal/fixture"
 )
 
-func TestExecDockerSimple(t *testing.T) {
+func TestExecDockerSimpleCommand(t *testing.T) {
 	targetID, cleanup := fixture.DockerRunBackground(t, fixture.ImageNginx, nil)
 	defer cleanup()
 
@@ -20,6 +20,22 @@ func TestExecDockerSimple(t *testing.T) {
 	)
 	res.Assert(t, icmd.Success)
 	assert.Check(t, cmp.Contains(res.Stdout(), "debian"))
+}
+
+func TestExecDockerShell(t *testing.T) {
+	targetID, cleanup := fixture.DockerRunBackground(t, fixture.ImageDistrolessNodejs, nil,
+		"-e", "setInterval(() => console.log('hello'), 5000);",
+	)
+	defer cleanup()
+
+	res := icmd.RunCmd(
+		icmd.Command("cdebug", "exec", "--rm", "-i", targetID),
+		icmd.WithStdin(strings.NewReader("echo \"hello $((6*7)) world\"\nexit 0\n")),
+	)
+
+	res.Assert(t, icmd.Success)
+	assert.Equal(t, res.Stderr(), "")
+	assert.Check(t, cmp.Contains(res.Stdout(), "hello 42 world"))
 }
 
 func TestExecDockerHostNamespaces(t *testing.T) {
@@ -51,16 +67,6 @@ func TestExecDockerRunAsUser(t *testing.T) {
 	)
 	res.Assert(t, icmd.Success)
 	assert.Check(t, cmp.Contains(res.Stdout(), "BusyBox v1"))
-}
-
-func TestExecDockerRootFS(t *testing.T) {
-	targetID, cleanup := fixture.DockerRunBackground(t, fixture.ImageNginx, nil)
-	defer cleanup()
-
-	cmd := icmd.Command("cdebug", "exec", "--rm", "-q", targetID, "echo", "'$CDEBUG_ROOTFS'")
-	res := icmd.RunCmd(cmd)
-	res.Assert(t, icmd.Success)
-	assert.Check(t, cmp.Contains(res.Stdout(), "/.cdebug-"))
 }
 
 func TestExecDockerNixery(t *testing.T) {
@@ -102,4 +108,14 @@ func TestExecDockerUseLocalImage(t *testing.T) {
 	res.Assert(t, icmd.Success)
 	assert.Check(t, cmp.Contains(res.Stdout(), "debian"))
 	assert.Equal(t, strings.Contains(res.Stderr(), "Pulling debugger image..."), false)
+}
+
+func TestExecCdebugRootfsEnvVar(t *testing.T) {
+	targetID, cleanup := fixture.DockerRunBackground(t, fixture.ImageNginx, nil)
+	defer cleanup()
+
+	cmd := icmd.Command("cdebug", "exec", "--rm", "-q", targetID, "echo", "$CDEBUG_ROOTFS")
+	res := icmd.RunCmd(cmd)
+	res.Assert(t, icmd.Success)
+	assert.Check(t, cmp.Contains(res.Stdout(), "/.cdebug-"))
 }

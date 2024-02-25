@@ -273,7 +273,9 @@ func debuggerName(name string, runID string) string {
 
 var (
 	simpleEntrypoint = template.Must(template.New("user-entrypoint").Parse(`
-set -euo pipefail
+set -eu
+
+export CDEBUG_ROOTFS=/
 
 if [ "${HOME:-/}" != "/" ]; then
 	ln -s /proc/{{ .TARGET_PID }}/root/ ${HOME}target-rootfs
@@ -301,9 +303,10 @@ fi
 ln -s /proc/${CURRENT_PID}/root/ /proc/{{ .TARGET_PID }}/root/.cdebug-{{ .ID }}
 
 export CDEBUG_ROOTFS=/.cdebug-{{ .ID }}
+
 cat > /.cdebug-entrypoint.sh <<EOF
 #!/bin/sh
-export PATH=$PATH:/.cdebug-{{ .ID }}/bin
+export PATH=$PATH:$CDEBUG_ROOTFS/bin:$CDEBUG_ROOTFS/usr/bin:$CDEBUG_ROOTFS/sbin:$CDEBUG_ROOTFS/usr/sbin:$CDEBUG_ROOTFS/usr/local/bin:$CDEBUG_ROOTFS/usr/local/sbin
 
 chroot /proc/{{ .TARGET_PID }}/root {{ .Cmd }}
 EOF
@@ -330,7 +333,7 @@ func debuggerEntrypoint(
 				"IsNix":      strings.Contains(image, "nixery"),
 				"Cmd": func() string {
 					if len(cmd) == 0 {
-						return ""
+						return "sh"
 					}
 					return "sh -c '" + strings.Join(shellescape(cmd), " ") + "'"
 				}(),

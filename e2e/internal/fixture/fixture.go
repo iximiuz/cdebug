@@ -11,6 +11,7 @@ import (
 )
 
 const (
+	ImageDistrolessNodejs  = "gcr.io/distroless/nodejs20-debian12"
 	ImageNginx             = "docker.io/library/nginx:1.25"
 	ImageNginxUnprivileged = "docker.io/nginxinc/nginx-unprivileged:1.25"
 

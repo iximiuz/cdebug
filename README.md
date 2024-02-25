@@ -431,6 +431,8 @@ Try `cdebug exec --privileged` instead.
 - [`cntr`](https://github.com/Mic92/cntr) - is "a replacement for `docker exec` that brings all your developers tools with you" by mounting the file system from one container (or the host) into the target container and creating a nested container with the help of a FUSE filesystem. Supports a huge range of runtimes (docker, podman, LXC/LXD, rkt, systemd-nspawn, containerd) because it operates on the OS level.
 - [`kdiag`](https://github.com/solo-io/kdiag) - a kubectl plugin to get shell access to scratch containers, stream logs from multiple pods simultaneously, and do reverse port forwarding to Kubernetes clusters.
 
+- [`kpexec`](https://github.com/ssup2/kpexec) - a CLI that runs commands in a Kubernetes container with high privileges (via a privileged Pod with Node access).
+
 ## TODO:
 
 - More `exec` flags (like in `docker run`): `--cap-add`, `--cap-drop`, `--env`, `--volume`, etc.
