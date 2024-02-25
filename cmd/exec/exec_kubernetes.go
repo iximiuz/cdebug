@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/sirupsen/logrus"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -33,6 +34,8 @@ import (
 	"github.com/iximiuz/cdebug/pkg/tty"
 	"github.com/iximiuz/cdebug/pkg/uuid"
 )
+
+// TODO: Handle exit codes - terminate the `cdebug exec` command with the same exit code as the debugger container.
 
 func runDebuggerKubernetes(ctx context.Context, cli cliutil.CLI, opts *options) error {
 	if opts.autoRemove {
@@ -309,6 +312,8 @@ func attachPodDebugger(
 	if status == nil {
 		return fmt.Errorf("error getting debugger container %q status: %+v", debuggerName, err)
 	}
+	logrus.Debugf("Debugger container %q status: %+v", debuggerName, status)
+
 	if status.State.Terminated != nil {
 		dumpDebuggerLogs(ctx, client, ns, podName, debuggerName, cli.OutputStream())
 
@@ -355,18 +360,26 @@ func attachPodDebugger(
 			TTY:       opts.tty,
 		}, scheme.ParameterCodec)
 
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
-	go func() {
-		// Container is not running anymore, stop streaming.
-		_, _ = waitForContainer(ctx, client, ns, podName, debuggerName, false)
-		cli.PrintAux("Debugger container %q is not running...\n", debuggerName)
-		cancel()
+	streamingCtx, cancelStreamingCtx := context.WithCancel(ctx)
+	defer cancelStreamingCtx()
 
-		dumpDebuggerLogs(ctx, client, ns, podName, debuggerName, cli.OutputStream())
+	go func() {
+		_, _ = waitForContainer(ctx, client, ns, podName, debuggerName, false)
+		// Debugger container is not running anymore - streaming no longer needed.
+		cancelStreamingCtx()
 	}()
 
-	return stream(ctx, cli, req.URL(), config, opts.tty)
+	if err := stream(streamingCtx, cli, req.URL(), config, opts.tty); err != nil {
+		return fmt.Errorf("error streaming to/from debugger container: %v", err)
+	}
+
+	cli.PrintAux("Debugger container %q terminated...\n", debuggerName)
+
+	if err := dumpDebuggerLogs(ctx, client, ns, podName, debuggerName, cli.OutputStream()); err != nil {
+		return fmt.Errorf("error dumping debugger logs: %v", err)
+	}
+
+	return nil
 }
 
 func stream(
@@ -439,12 +452,11 @@ func dumpDebuggerLogs(
 		if _, err := out.Write(bytes); err != nil {
 			return err
 		}
-
-		if err != nil {
-			if err != io.EOF {
-				return err
-			}
+		if err == io.EOF {
 			return nil
+		}
+		if err != nil {
+			return err
 		}
 	}
 }

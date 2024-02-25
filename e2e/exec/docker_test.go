@@ -29,7 +29,7 @@ func TestExecDockerShell(t *testing.T) {
 	defer cleanup()
 
 	res := icmd.RunCmd(
-		icmd.Command("cdebug", "exec", "--rm", "-i", targetID),
+		icmd.Command("cdebug", "exec", "--rm", "-q", "-i", targetID),
 		icmd.WithStdin(strings.NewReader("echo \"hello $((6*7)) world\"\nexit 0\n")),
 	)
 

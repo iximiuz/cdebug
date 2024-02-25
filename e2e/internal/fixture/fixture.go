@@ -4,6 +4,7 @@ import (
 	"os/exec"
 	"strings"
 	"testing"
+	"text/template"
 
 	"gotest.tools/icmd"
 
@@ -136,4 +137,38 @@ func NerdctlRunBackground(
 	}
 
 	return contID, cleanup
+}
+
+func KubectlApply(
+	t *testing.T,
+	manifestTmpl *template.Template,
+	data interface{},
+) func() {
+	var buf strings.Builder
+	if err := manifestTmpl.Execute(&buf, data); err != nil {
+		t.Fatalf("cannot execute template: %v", err)
+	}
+
+	manifest := buf.String()
+
+	cmd := icmd.Command("kubectl", "apply", "-f", "-")
+	res := icmd.RunCmd(cmd, icmd.WithStdin(strings.NewReader(manifest)))
+	res.Assert(t, icmd.Success)
+
+	return func() {
+		cmd := icmd.Command("kubectl", "delete", "-f", "-")
+		res := icmd.RunCmd(cmd, icmd.WithStdin(strings.NewReader(manifest)))
+		res.Assert(t, icmd.Success)
+	}
+}
+
+func KubectlWaitFor(
+	t *testing.T,
+	kind string,
+	name string,
+	condition string,
+) {
+	cmd := icmd.Command("kubectl", "wait", kind, name, "--for=condition="+condition, "--timeout=60s")
+	res := icmd.RunCmd(cmd)
+	res.Assert(t, icmd.Success)
 }
