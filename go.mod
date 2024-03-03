@@ -18,7 +18,7 @@ require (
 	github.com/spf13/cobra v1.8.0
 	golang.org/x/sys v0.17.0
 	gotest.tools v2.2.0+incompatible
-	gotest.tools/v3 v3.4.0
+	gotest.tools/v3 v3.5.1
 	k8s.io/api v0.29.2
 	k8s.io/apimachinery v0.29.2
 	k8s.io/client-go v0.29.2
