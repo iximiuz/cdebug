@@ -4,7 +4,7 @@ go 1.22
 
 require (
 	github.com/containerd/console v1.0.4
-	github.com/containerd/containerd v1.7.13
+	github.com/containerd/containerd v1.7.14
 	github.com/distribution/reference v0.5.0
 	github.com/docker/cli v25.0.3+incompatible
 	github.com/docker/docker v25.0.3+incompatible
