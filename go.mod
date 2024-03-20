@@ -7,7 +7,7 @@ require (
 	github.com/containerd/containerd v1.7.13
 	github.com/distribution/reference v0.5.0
 	github.com/docker/cli v25.0.3+incompatible
-	github.com/docker/docker v25.0.3+incompatible
+	github.com/docker/docker v25.0.5+incompatible
 	github.com/docker/go-connections v0.5.0
 	github.com/evanphx/json-patch v4.12.0+incompatible
 	github.com/google/uuid v1.6.0
