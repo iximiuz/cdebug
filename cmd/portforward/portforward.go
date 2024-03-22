@@ -11,6 +11,7 @@ import (
 
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types/filters"
 	dockerclient "github.com/docker/docker/client"
 	"github.com/docker/go-connections/nat"
 	"github.com/sirupsen/logrus"
@@ -147,12 +148,22 @@ func runPortForward(ctx context.Context, cli cliutil.CLI, opts *options) error {
 		return err
 	}
 
-	// TODO: Pull only if not present locally.
-	cli.PrintAux("Pulling forwarder image...\n")
-	if err := client.ImagePullEx(ctx, forwarderImage, types.ImagePullOptions{
-		// Platform: ... TODO: Test if an arm64 sidecar can be attached to an amd64 target and vice versa.
-	}); err != nil {
-		return fmt.Errorf("cannot pull forwarder image %q: %w", forwarderImage, err)
+	// Find existing forwarder image.
+	images, err := client.ImageList(ctx, types.ImageListOptions{
+		All: true,
+		Filters: filters.NewArgs(
+			filters.Arg("reference", forwarderImage),
+		),
+	})
+	if err != nil || len(images) == 0 {
+		cli.PrintAux("Pulling forwarder image...\n")
+		if err := client.ImagePullEx(ctx, forwarderImage, types.ImagePullOptions{
+			// Platform: ... TODO: Test if an arm64 sidecar can be attached to an amd64 target and vice versa.
+		}); err != nil {
+			return fmt.Errorf("cannot pull forwarder image %q: %w", forwarderImage, err)
+		}
+	} else {
+		cli.PrintAux("Using existing forwarder image...\n")
 	}
 
 	ctx, cancel := context.WithCancel(signalutil.InterruptibleContext(ctx))
