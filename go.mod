@@ -16,7 +16,7 @@ require (
 	github.com/opencontainers/runtime-spec v1.1.0
 	github.com/sirupsen/logrus v1.9.3
 	github.com/spf13/cobra v1.8.0
-	golang.org/x/sys v0.17.0
+	golang.org/x/sys v0.19.0
 	gotest.tools v2.2.0+incompatible
 	gotest.tools/v3 v3.4.0
 	k8s.io/api v0.29.2
