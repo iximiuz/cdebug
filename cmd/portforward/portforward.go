@@ -672,7 +672,7 @@ func startLocalDirectForwarder(
 		return "", fmt.Errorf("cannot create forwarder container: %w", err)
 	}
 
-	if err := client.ContainerStart(ctx, resp.ID, types.ContainerStartOptions{}); err != nil {
+	if err := client.ContainerStart(ctx, resp.ID, container.StartOptions{}); err != nil {
 		return resp.ID, fmt.Errorf("cannot start forwarder container: %w", err)
 	}
 
@@ -792,7 +792,7 @@ func startLocalSidecarForwarder(
 		return "", "", fmt.Errorf("cannot create forwarder sidecar container: %w", err)
 	}
 
-	if err := client.ContainerStart(ctx, resp.ID, types.ContainerStartOptions{}); err != nil {
+	if err := client.ContainerStart(ctx, resp.ID, container.StartOptions{}); err != nil {
 		return resp.ID, "", fmt.Errorf("cannot start forwarder sidecar container: %w", err)
 	}
 
@@ -875,7 +875,7 @@ func cleanupContainerIfExist(
 	ctx, cancel := context.WithTimeout(context.Background(), cleanupTimeout)
 	defer cancel()
 
-	if err := client.ContainerRemove(ctx, contID, types.ContainerRemoveOptions{Force: true}); err != nil {
+	if err := client.ContainerRemove(ctx, contID, container.RemoveOptions{Force: true}); err != nil {
 		logrus.Debugf("Cannot force-remove container %s: %s", contID, err)
 	}
 }
