@@ -39,7 +39,7 @@ import (
 
 func runDebuggerKubernetes(ctx context.Context, cli cliutil.CLI, opts *options) error {
 	if opts.autoRemove {
-		return fmt.Errorf("--rm flag is not supported for Kubernetes")
+		return fmt.Errorf("--rm flag is not supported for Kubernetes runtime")
 	}
 	if err := validateUserFlag(opts.user); err != nil {
 		return err
@@ -105,6 +105,21 @@ func runDebuggerKubernetes(ctx context.Context, cli cliutil.CLI, opts *options) 
 		debuggerEntrypoint(cli, runID, 1, opts.image, opts.cmd, useChroot),
 	); err != nil {
 		return fmt.Errorf("error adding debugger container: %v", err)
+	}
+
+	if opts.detach {
+		attachCmd := []string{"kubectl", "attach", "-n", namespace, "-c", debuggerName}
+		if opts.stdin {
+			attachCmd = append(attachCmd, "-i")
+		}
+		if opts.tty {
+			attachCmd = append(attachCmd, "-t")
+		}
+		attachCmd = append(attachCmd, podName)
+
+		cli.PrintAux("Debugger container %q started in the background.\n", debuggerName)
+		cli.PrintAux("Use %#q if you need to attach to it.\n", strings.Join(attachCmd, " "))
+		return nil
 	}
 
 	return attachPodDebugger(

@@ -79,6 +79,7 @@ type options struct {
 	image      string
 	tty        bool
 	stdin      bool
+	detach     bool
 	cmd        []string
 	user       string
 	privileged bool
@@ -143,13 +144,13 @@ func NewCommand(cli cliutil.CLI) *cobra.Command {
 
 			switch opts.schema {
 			case schemaContainerd, schemaNerdctl:
-				return cliutil.WrapStatusError(runDebuggerContainerd(ctx, cli, &opts))
+				return cliutil.WrapStatusError(wrapExitError(runDebuggerContainerd(ctx, cli, &opts)))
 
 			case schemaDocker:
-				return cliutil.WrapStatusError(runDebuggerDocker(ctx, cli, &opts))
+				return cliutil.WrapStatusError(wrapExitError(runDebuggerDocker(ctx, cli, &opts)))
 
 			case schemaKubeLong, schemaKubeShort:
-				return cliutil.WrapStatusError(runDebuggerKubernetes(ctx, cli, &opts))
+				return cliutil.WrapStatusError(wrapExitError(runDebuggerKubernetes(ctx, cli, &opts)))
 
 			case schemaPodman, schemaOCI, schemaKubeCRI:
 				return cliutil.WrapStatusError(errors.New("coming soon"))
@@ -195,6 +196,13 @@ func NewCommand(cli cliutil.CLI) *cobra.Command {
 		"t",
 		false,
 		`Allocate a pseudo-TTY (as in "docker exec -t")`,
+	)
+	flags.BoolVarP(
+		&opts.detach,
+		"detach",
+		"d",
+		false,
+		`Detached mode: execute the command in the background`,
 	)
 	flags.StringVarP(
 		&opts.user,
@@ -378,4 +386,16 @@ func shellescape(args []string) (escaped []string) {
 
 func isRootUser(user string) bool {
 	return len(user) == 0 || user == "root" || user == "0" || user == "0:0"
+}
+
+func wrapExitError(err error) error {
+	if err == nil {
+		return nil
+	}
+
+	if strings.Contains(strings.ToLower(err.Error()), "permission denied") {
+		return fmt.Errorf("%s\n\nHint: try running `cdebug exec` with the --privileged flag", err)
+	}
+
+	return err
 }

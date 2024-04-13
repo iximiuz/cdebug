@@ -29,6 +29,10 @@ import (
 )
 
 func runDebuggerContainerd(ctx context.Context, cli cliutil.CLI, opts *options) error {
+	if opts.detach {
+		return errors.New("--detach|-d flag is not supported for containerd runtime yet")
+	}
+
 	if strings.Contains(opts.namespace, "/") {
 		return errors.New("namespaces with '/' are unsupported")
 	}

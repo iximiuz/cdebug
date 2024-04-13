@@ -416,11 +416,9 @@ $ curl localhost:49176
 
 ## F.A.Q
 
-**Q:** Running `cdebug exec` fails with `rm: cannot remove '/proc/1/root/nix': Permission denied` or
-`ln: /proc/1/root/.cdebug-XXXXXXXX: Permission denied`.
+**Q:** `cdebug exec` fails with `ln: /proc/1/root/...: Permission denied` or the like error?
 
-Chances are your target container has been started with elevated permissions while you're trying to run a non-privileged debugger sidecar.
-Try `cdebug exec --privileged` instead.
+Non-privileged targets can cause this error because by default, `cdebug` tries to start the debugger container with the same privileges as the target container. Try `cdebug exec --privileged` instead.
 
 ## Similar tools
 

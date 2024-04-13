@@ -98,27 +98,31 @@ func runDebuggerDocker(ctx context.Context, cli cliutil.CLI, opts *options) erro
 		return errCannotCreate(err)
 	}
 
-	close, err := attachDebugger(ctx, cli, client, opts, resp.ID)
-	if err != nil {
-		return fmt.Errorf("cannot attach to debugger container: %w", err)
+	if !opts.detach {
+		close, err := attachDebugger(ctx, cli, client, opts, resp.ID)
+		if err != nil {
+			return fmt.Errorf("cannot attach to debugger container: %w", err)
+		}
+		defer close()
 	}
-	defer close()
 
 	if err := client.ContainerStart(ctx, resp.ID, container.StartOptions{}); err != nil {
 		return fmt.Errorf("cannot start debugger container: %w", err)
 	}
 
-	if opts.tty && cli.OutputStream().IsTerminal() {
-		tty.StartResizing(ctx, cli.OutputStream(), client, resp.ID)
-	}
-
-	statusCh, errCh := client.ContainerWait(ctx, resp.ID, container.WaitConditionNotRunning)
-	select {
-	case err := <-errCh:
-		if err != nil {
-			return fmt.Errorf("waiting debugger container failed: %w", err)
+	if !opts.detach {
+		if opts.tty && cli.OutputStream().IsTerminal() {
+			tty.StartResizing(ctx, cli.OutputStream(), client, resp.ID)
 		}
-	case <-statusCh:
+
+		statusCh, errCh := client.ContainerWait(ctx, resp.ID, container.WaitConditionNotRunning)
+		select {
+		case err := <-errCh:
+			if err != nil {
+				return fmt.Errorf("waiting debugger container failed: %w", err)
+			}
+		case <-statusCh:
+		}
 	}
 
 	return nil
@@ -131,7 +135,7 @@ func attachDebugger(
 	opts *options,
 	contID string,
 ) (func(), error) {
-	resp, err := client.ContainerAttach(ctx, contID, types.ContainerAttachOptions{
+	resp, err := client.ContainerAttach(ctx, contID, container.AttachOptions{
 		Stream: true,
 		Stdin:  opts.stdin,
 		Stdout: true,
