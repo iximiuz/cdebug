@@ -45,7 +45,7 @@ func TestExecDockerHostNamespaces(t *testing.T) {
 	defer cleanup()
 
 	res := icmd.RunCmd(
-		icmd.Command("cdebug", "exec", "-l", "debug", "--rm", "-q", targetID, "cat", "/etc/os-release"),
+		icmd.Command("cdebug", "exec", "--rm", "-q", targetID, "cat", "/etc/os-release"),
 	)
 	res.Assert(t, icmd.Success)
 	assert.Check(t, cmp.Contains(res.Stdout(), "debian"))

@@ -30,9 +30,6 @@ func dockerCmd(args ...string) icmd.Cmd {
 	return icmd.Command(
 		"docker", args...,
 	)
-	//return icmd.Command(
-	//	"sudo", append([]string{"-E", "docker"}, args...)...,
-	//)
 }
 
 func nerdctlCmd(args ...string) icmd.Cmd {
