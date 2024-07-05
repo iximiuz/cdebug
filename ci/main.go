@@ -20,25 +20,13 @@ import (
 
 type Ci struct{}
 
-// GIT_COMMIT=$(shell git rev-parse --verify HEAD)
-// UTC_NOW=$(shell date -u +"%Y-%m-%dT%H:%M:%SZ")
-//
-// build-dev:
-// 	go build \
-// 		-ldflags="-X 'main.version=dev' -X 'main.commit=${GIT_COMMIT}' -X 'main.date=${UTC_NOW}'" \
-// 		-o cdebug
-
 func (m *Ci) Build(ctx context.Context, src *Directory) *File {
 	return dag.Go().FromVersion("1.22-alpine").Build(src, GoBuildOpts{
 		Static: true,
 	}).File("cdebug")
 }
 
-// socat TCP-LISTEN:2375,reuseaddr,fork UNIX-CONNECT:/var/run/docker.sock &
-// socat TCP-LISTEN:2376,reuseaddr,fork UNIX-CONNECT:/var/run/containerd/containerd.sock &
-// dagger call test --src .. --docker tcp://127.0.0.1:2375 --containerd tcp://127.0.0.1:2376
-// Runs the e2e tests for the project.
-func (m *Ci) Test(ctx context.Context, src *Directory) (*Container, error) {
+func (m *Ci) TestDocker(ctx context.Context, src *Directory) (*Container, error) {
 	cdebug := m.Build(ctx, src)
 
 	docker := dag.
@@ -54,10 +42,9 @@ func (m *Ci) Test(ctx context.Context, src *Directory) (*Container, error) {
 	}
 
 	docker = docker.
+		WithEnvVariable("DOCKER_TLS_CERTDIR", "").
 		WithExec([]string{
-			"dockerd",
-			"--host=tcp://0.0.0.0:2375",
-			"--tls=false",
+			"dockerd-entrypoint.sh",
 		}, ContainerWithExecOpts{
 			InsecureRootCapabilities: true,
 		})
@@ -71,15 +58,5 @@ func (m *Ci) Test(ctx context.Context, src *Directory) (*Container, error) {
 		WithWorkdir("/app/cdebug").
 		WithServiceBinding("docker", docker.AsService()).
 		WithEnvVariable("DOCKER_HOST", "tcp://docker:2375").
-		WithExec([]string{"go", "test", "-run=TestExecDockerSimpleCommand", "./e2e/exec"}), nil
-}
-
-func (m *Ci) testBase(ctx context.Context) *Container {
-	return dag.Container().
-		From("golang:1.22-alpine").
-		WithExec([]string{"apk", "add", "--no-cache", "sudo", "docker", "kubectl", "nerdctl"})
-	// WithExec([]string{"go", "install", "sigs.k8s.io/kind@v0.22.0"})
-	// WithFile("/usr/local/bin/kind", dag.HTTP("https://kind.sigs.k8s.io/dl/v0.22.0/kind-linux-amd64"), ContainerWithFileOpts{
-	// 	Permissions: 0777,
-	// })
+		WithExec([]string{"go", "test", "-v", "./e2e/exec/docker_test.go"}), nil
 }
