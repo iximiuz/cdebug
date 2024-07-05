@@ -16,6 +16,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 )
 
 type Ci struct{}
@@ -26,7 +27,31 @@ func (m *Ci) Build(ctx context.Context, src *Directory) *File {
 	}).File("cdebug")
 }
 
-func (m *Ci) TestDocker(ctx context.Context, src *Directory) (*Container, error) {
+func (m *Ci) TestExec(ctx context.Context,
+	src *Directory,
+	// +optional
+	// +default="docker"
+	tool string,
+) (*Container, error) {
+	if tool != "docker" && tool != "kubernetes" && tool != "containerd" && tool != "nerdctl" {
+		return nil, fmt.Errorf("tool %s is not supported. Supported values are: kubernetes,containerd,nerdctl,docker")
+	}
+
+	if tool != "docker" {
+		return nil, fmt.Errorf("tool %s is no yet implemented", tool)
+	}
+
+	switch tool {
+	case "docker":
+		return m.TestDockerExec(ctx, src)
+	default:
+		return nil, fmt.Errorf("tool %s is no yet implemented", tool)
+	}
+
+	return nil, nil
+}
+
+func (m *Ci) TestDockerExec(ctx context.Context, src *Directory) (*Container, error) {
 	cdebug := m.Build(ctx, src)
 
 	docker := dag.

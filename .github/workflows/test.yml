@@ -17,4 +17,4 @@ jobs:
         with:
           verb: call
           module: ./ci
-          args: test-docker --src . stdout
+          args: test-exec --src . --tool docker stdout
