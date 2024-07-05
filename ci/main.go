@@ -30,13 +30,16 @@ type Ci struct{}
 // 		-o cdebug
 
 func (m *Ci) Build(ctx context.Context, src *Directory) *File {
-	return dag.Container().
-		From("golang:1.22-alpine").
-		WithDirectory("/app", src).
-		WithWorkdir("/app").
-		WithEnvVariable("CGO_ENABLED", "0").
-		WithExec([]string{"go", "build", "-o", "cdebug"}).
-		File("cdebug")
+	return dag.Go().Build(src, GoBuildOpts{
+		Static: true,
+	}).File("cdebug")
+	// return dag.Container().
+	// From("golang:1.22-alpine").
+	// WithDirectory("/app", src).
+	// WithWorkdir("/app").
+	// WithEnvVariable("CGO_ENABLED", "0").
+	// WithExec([]string{"go", "build", "-o", "cdebug"}).
+	// File("cdebug")
 }
 
 // socat TCP-LISTEN:2375,reuseaddr,fork UNIX-CONNECT:/var/run/docker.sock &
