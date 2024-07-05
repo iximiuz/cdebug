@@ -28,8 +28,11 @@ func ctrCmd(args ...string) icmd.Cmd {
 
 func dockerCmd(args ...string) icmd.Cmd {
 	return icmd.Command(
-		"sudo", append([]string{"-E", "docker"}, args...)...,
+		"docker", args...,
 	)
+	//return icmd.Command(
+	//	"sudo", append([]string{"-E", "docker"}, args...)...,
+	//)
 }
 
 func nerdctlCmd(args ...string) icmd.Cmd {
