@@ -28,7 +28,7 @@ func ctrCmd(args ...string) icmd.Cmd {
 
 func dockerCmd(args ...string) icmd.Cmd {
 	return icmd.Command(
-		"sudo", append([]string{"-E", "docker"}, args...)...,
+		"docker", args...,
 	)
 }
 
