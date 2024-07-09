@@ -55,7 +55,10 @@ const (
   cdebug exec --namespace=myns -it pod/mypod
 
   # Start a shell in a Kubernetes pod's container:
-  cdebug exec -it pod/mypod/mycontainer`
+  cdebug exec -it pod/mypod/mycontainer
+
+  # Start a shell on a Kubernetes node:
+  cdebug exec -it node/mynode`
 )
 
 var (
@@ -123,7 +126,7 @@ func NewCommand(cli cliutil.CLI) *cobra.Command {
 			if sep := strings.Index(opts.target, "://"); sep != -1 {
 				opts.schema = opts.target[:sep+3]
 				opts.target = opts.target[sep+3:]
-			} else if strings.HasPrefix(opts.target, "pod/") || strings.HasPrefix(opts.target, "pods/") {
+			} else if strings.HasPrefix(opts.target, "pod/") || strings.HasPrefix(opts.target, "pods/") || strings.HasPrefix(opts.target, "node/") || strings.HasPrefix(opts.target, "nodes/") {
 				opts.schema = schemaKubeLong
 			} else {
 				opts.schema = schemaDocker
@@ -353,7 +356,7 @@ func debuggerEntrypoint(
 		cli,
 		simpleEntrypoint,
 		map[string]any{
-			"PID": targetPID,
+			"TARGET_PID": targetPID,
 			"Cmd": func() string {
 				if len(cmd) == 0 {
 					return "sh"
