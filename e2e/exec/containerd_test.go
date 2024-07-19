@@ -17,7 +17,7 @@ func TestExecContainerdSimple(t *testing.T) {
 
 	res := icmd.RunCmd(
 		icmd.Command(
-			"sudo", "cdebug", "exec", "-n", fixture.ContainerdCtrNamespace, "--rm", "-q",
+			"cdebug", "exec", "-n", fixture.ContainerdCtrNamespace, "--rm", "-q",
 			"containerd://"+targetID,
 			"cat", "/etc/os-release",
 		),
@@ -34,7 +34,7 @@ func TestExecContainerdHostNamespaces(t *testing.T) {
 
 	res := icmd.RunCmd(
 		icmd.Command(
-			"sudo", "cdebug", "exec", "-n", fixture.ContainerdCtrNamespace, "--rm", "-q",
+			"cdebug", "exec", "-n", fixture.ContainerdCtrNamespace, "--rm", "-q",
 			"containerd://"+targetID,
 			"cat", "/etc/os-release",
 		),
@@ -49,7 +49,7 @@ func TestExecContainerdRunAsUser(t *testing.T) {
 
 	res := icmd.RunCmd(
 		icmd.Command(
-			"sudo", "cdebug", "exec", "-n", fixture.ContainerdCtrNamespace, "--rm", "-q", "-u", "101:101",
+			"cdebug", "exec", "-n", fixture.ContainerdCtrNamespace, "--rm", "-q", "-u", "101:101",
 			"containerd://"+targetID,
 			"id", "-u",
 		),
@@ -60,7 +60,7 @@ func TestExecContainerdRunAsUser(t *testing.T) {
 
 	res = icmd.RunCmd(
 		icmd.Command(
-			"sudo", "cdebug", "exec", "-n", fixture.ContainerdCtrNamespace, "--rm", "-q", "-u", "101:101",
+			"cdebug", "exec", "-n", fixture.ContainerdCtrNamespace, "--rm", "-q", "-u", "101:101",
 			"containerd://"+targetID,
 			"busybox",
 		),
@@ -75,7 +75,7 @@ func TestExecContainerdNixery(t *testing.T) {
 
 	res := icmd.RunCmd(
 		icmd.Command(
-			"sudo", "cdebug", "exec", "-n", fixture.ContainerdCtrNamespace, "--rm", "-q",
+			"cdebug", "exec", "-n", fixture.ContainerdCtrNamespace, "--rm", "-q",
 			"--image", "nixery.dev/shell/vim",
 			"containerd://"+targetID,
 			"vim", "--version",

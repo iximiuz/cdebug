@@ -7,14 +7,14 @@ on:
 name: E2E Tests
 
 jobs:
-  test-docker:
+  test-exec:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Docker E2E Test
-        uses: dagger/dagger-for-github@v5
+      - name: Exec E2E Tests
+        uses: dagger/dagger-for-github@v6
         with:
           verb: call
           module: ./ci
-          args: test-exec --src . --tool docker stdout
+          args: test-exec --src .
