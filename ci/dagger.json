@@ -4,9 +4,9 @@
   "dependencies": [
     {
       "name": "go",
-      "source": "github.com/vito/daggerverse/go@f7223d2d82fb91622cbb7954177388d995a98d59"
+      "source": "github.com/vito/daggerverse/go@36e8ce2f9eb52cd73c4d5397ed4ed65912d7b6ac"
     }
   ],
   "source": ".",
-  "engineVersion": "v0.11.9"
+  "engineVersion": "v0.12.0"
 }
