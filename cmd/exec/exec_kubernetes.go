@@ -67,44 +67,19 @@ func runDebuggerKubernetes(ctx context.Context, cli cliutil.CLI, opts *options) 
 	}
 
 	var (
-		podName    string
-		targetName string
+		podName      string
+		debuggerName string
+		ephemeral    bool
 	)
-	opts.target = strings.TrimPrefix(opts.target, "pod/")
-	opts.target = strings.TrimPrefix(opts.target, "pods/")
-	if strings.Contains(opts.target, "/") {
-		podName = strings.Split(opts.target, "/")[0]
-		targetName = strings.Split(opts.target, "/")[1]
+	if strings.HasPrefix(opts.target, "node/") || strings.HasPrefix(opts.target, "nodes/") {
+		podName, debuggerName, err = runNodeDebugger(ctx, cli, opts, namespace, client)
 	} else {
-		podName = opts.target
+		podName, debuggerName, err = runPodDebugger(ctx, cli, opts, namespace, client)
+		ephemeral = true
 	}
 
-	pod, err := client.
-		CoreV1().
-		Pods(namespace).
-		Get(ctx, podName, metav1.GetOptions{})
 	if err != nil {
-		return fmt.Errorf("error getting target pod: %v", err)
-	}
-
-	runID := uuid.ShortID()
-	debuggerName := debuggerName(opts.name, runID)
-	cli.PrintAux("Debugger container name: %s\n", debuggerName)
-
-	cli.PrintAux("Starting debugger container...\n")
-
-	useChroot := isRootUser(opts.user) && !isReadOnlyRootFS(pod, targetName) && !runsAsNonRoot(pod, targetName)
-	if err := runPodDebugger(
-		ctx,
-		cli,
-		opts,
-		client,
-		pod,
-		targetName,
-		debuggerName,
-		debuggerEntrypoint(cli, runID, 1, opts.image, opts.cmd, useChroot),
-	); err != nil {
-		return fmt.Errorf("error adding debugger container: %v", err)
+		return fmt.Errorf("error creating debugger: %v", err)
 	}
 
 	if opts.detach {
@@ -131,10 +106,125 @@ func runDebuggerKubernetes(ctx context.Context, cli cliutil.CLI, opts *options) 
 		namespace,
 		podName,
 		debuggerName,
+		ephemeral,
 	)
 }
 
-func runPodDebugger(
+func runPodDebugger(ctx context.Context, cli cliutil.CLI, opts *options, namespace string, client kubernetes.Interface) (string, string, error) {
+	var (
+		podName    string
+		targetName string
+	)
+	opts.target = strings.TrimPrefix(opts.target, "pod/")
+	opts.target = strings.TrimPrefix(opts.target, "pods/")
+	if strings.Contains(opts.target, "/") {
+		podName = strings.Split(opts.target, "/")[0]
+		targetName = strings.Split(opts.target, "/")[1]
+	} else {
+		podName = opts.target
+	}
+
+	pod, err := client.
+		CoreV1().
+		Pods(namespace).
+		Get(ctx, podName, metav1.GetOptions{})
+	if err != nil {
+		return "", "", fmt.Errorf("error getting target pod: %v", err)
+	}
+
+	runID := uuid.ShortID()
+	debuggerName := debuggerName(opts.name, runID)
+	cli.PrintAux("Debugger container name: %s\n", debuggerName)
+
+	cli.PrintAux("Starting debugger container...\n")
+
+	useChroot := isRootUser(opts.user) && !isReadOnlyRootFS(pod, targetName) && !runsAsNonRoot(pod, targetName)
+	if err := addEphemeralDebugger(
+		ctx,
+		cli,
+		opts,
+		client,
+		pod,
+		targetName,
+		debuggerName,
+		debuggerEntrypoint(cli, runID, 1, opts.image, opts.cmd, useChroot),
+	); err != nil {
+		return "", "", fmt.Errorf("error adding debugger container: %v", err)
+	}
+
+	return podName, debuggerName, nil
+}
+
+func runNodeDebugger(ctx context.Context, cli cliutil.CLI, opts *options, namespace string, client kubernetes.Interface) (string, string, error) {
+	opts.target = strings.TrimPrefix(opts.target, "node/")
+	opts.target = strings.TrimPrefix(opts.target, "nodes/")
+
+	runID := uuid.ShortID()
+	podName := fmt.Sprintf("cdebug-%s-%s", opts.target, runID)
+	debuggerName := "cdebug"
+	volumeName := "host-root"
+
+	p := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      podName,
+			Namespace: namespace,
+		},
+		Spec: corev1.PodSpec{
+			Containers: []corev1.Container{
+				{
+					Name:            debuggerName,
+					Image:           opts.image,
+					ImagePullPolicy: corev1.PullIfNotPresent,
+					Command:         []string{"sh", "-c", debuggerEntrypoint(cli, runID, 1, opts.image, opts.cmd, false)},
+					Stdin:           opts.stdin,
+					TTY:             opts.tty,
+					// Env:                   TODO...
+					// VolumeDevices: 			  TODO...
+					SecurityContext: &corev1.SecurityContext{
+						Privileged: &opts.privileged,
+						RunAsUser:  uidPtr(opts.user),
+						RunAsGroup: gidPtr(opts.user),
+					},
+					TerminationMessagePolicy: corev1.TerminationMessageReadFile,
+					VolumeMounts: []corev1.VolumeMount{
+						{
+							Name:      volumeName,
+							MountPath: "/host",
+						},
+					},
+				},
+			},
+			// Share host's network, PID and IPC with debug pod
+			HostNetwork: true,
+			HostPID:     true,
+			HostIPC:     true,
+
+			NodeName:      opts.target,
+			RestartPolicy: corev1.RestartPolicyNever,
+			Tolerations: []corev1.Toleration{
+				{
+					Operator: corev1.TolerationOpExists,
+				},
+			},
+			Volumes: []corev1.Volume{
+				{
+					Name: volumeName,
+					VolumeSource: corev1.VolumeSource{
+						HostPath: &corev1.HostPathVolumeSource{Path: "/"},
+					},
+				},
+			},
+		},
+	}
+
+	if _, err := client.CoreV1().Pods(namespace).Create(ctx, p, metav1.CreateOptions{}); err != nil {
+		return "", "", fmt.Errorf("error creating debug pod: %v", err)
+	}
+
+	return podName, debuggerName, nil
+}
+
+func addEphemeralDebugger(
 	ctx context.Context,
 	cli cliutil.CLI,
 	opts *options,
@@ -316,6 +406,7 @@ func attachPodDebugger(
 	ns string,
 	podName string,
 	debuggerName string,
+	ephemeral bool,
 ) error {
 	cli.PrintAux("Waiting for debugger container...\n")
 	pod, err := waitForContainer(ctx, client, ns, podName, debuggerName, true)
@@ -343,7 +434,13 @@ func attachPodDebugger(
 			status.State.Terminated.ExitCode)
 	}
 
-	debuggerContainer := ephemeralContainerByName(pod, debuggerName)
+	var debuggerContainer *corev1.Container
+	if ephemeral {
+		debuggerContainer = ephemeralContainerByName(pod, debuggerName)
+	} else {
+		debuggerContainer = containerByName(pod, debuggerName)
+
+	}
 	if debuggerContainer == nil {
 		return fmt.Errorf("cannot find debugger container %q in pod %q", debuggerName, podName)
 	}
@@ -545,10 +642,11 @@ func containerByName(pod *corev1.Pod, containerName string) *corev1.Container {
 	return nil
 }
 
-func ephemeralContainerByName(pod *corev1.Pod, containerName string) *corev1.EphemeralContainer {
+func ephemeralContainerByName(pod *corev1.Pod, containerName string) *corev1.Container {
 	for i := range pod.Spec.EphemeralContainers {
 		if pod.Spec.EphemeralContainers[i].Name == containerName {
-			return &pod.Spec.EphemeralContainers[i]
+			c := corev1.Container(pod.Spec.EphemeralContainers[i].EphemeralContainerCommon)
+			return &c
 		}
 	}
 	return nil
