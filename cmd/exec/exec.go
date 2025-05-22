@@ -315,6 +315,7 @@ export CDEBUG_ROOTFS=/.cdebug-{{ .ID }}
 cat > /.cdebug-entrypoint.sh <<EOF
 #!/bin/sh
 export PATH=$PATH:$CDEBUG_ROOTFS/bin:$CDEBUG_ROOTFS/usr/bin:$CDEBUG_ROOTFS/sbin:$CDEBUG_ROOTFS/usr/sbin:$CDEBUG_ROOTFS/usr/local/bin:$CDEBUG_ROOTFS/usr/local/sbin
+export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:$CDEBUG_ROOTFS/usr/lib:$CDEBUG_ROOTFS/usr/lib64
 
 chroot /proc/{{ .TARGET_PID }}/root {{ .Cmd }}
 EOF
