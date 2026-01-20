@@ -308,9 +308,7 @@ if [ ${CURRENT_NIX_INODE} -ne ${TARGET_NIX_INODE} ]; then
 fi
 {{ end }}
 
-ln -s /proc/${CURRENT_PID}/root/ /proc/{{ .TARGET_PID }}/root/.cdebug-{{ .ID }}
-
-export CDEBUG_ROOTFS=/.cdebug-{{ .ID }}
+export CDEBUG_ROOTFS=/proc/${CURRENT_PID}/root/
 
 cat > /.cdebug-entrypoint.sh <<EOF
 #!/bin/sh

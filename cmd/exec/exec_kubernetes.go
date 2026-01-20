@@ -93,7 +93,7 @@ func runDebuggerKubernetes(ctx context.Context, cli cliutil.CLI, opts *options) 
 
 	cli.PrintAux("Starting debugger container...\n")
 
-	useChroot := isRootUser(opts.user) && !isReadOnlyRootFS(pod, targetName) && !runsAsNonRoot(pod, targetName)
+	useChroot := isRootUser(opts.user) && !runsAsNonRoot(pod, targetName)
 	if err := runPodDebugger(
 		ctx,
 		cli,
